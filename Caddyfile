@@ -1,0 +1,21 @@
+# LZRD — Caddy reverse-proxy configuration
+#
+# Replace "lzrd.yourdomain.com" with your actual domain name.
+# Caddy obtains and renews a TLS certificate automatically via Let's Encrypt.
+#
+# Before using this file:
+#   1. Point your domain's A/AAAA record at your server's public IP.
+#   2. Make sure ports 80 and 443 are open in your firewall/router.
+#   3. In your LZRD config.ini set:
+#        behind_proxy = true
+#        public_url   = https://lzrd.yourdomain.com
+#   4. Run:  caddy run --config Caddyfile
+
+lzrd.yourdomain.com {
+    reverse_proxy localhost:7734 {
+        # Flush immediately after every write so that Server-Sent Events
+        # (SSE) used for real-time movement alerts are delivered without
+        # buffering delay.
+        flush_interval -1
+    }
+}

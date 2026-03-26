@@ -220,7 +220,7 @@ Open `config.ini` in any text editor to change these settings. Restart LZRD afte
 
 ## Keeping LZRD private on your network
 
-LZRD is only accessible to devices on your local Wi-Fi — it never connects to the internet. Your access token protects it from anyone else on the network who might try to access it.
+By default, LZRD is only accessible to devices on your local Wi-Fi — it never connects to the internet on its own. Your access token protects it from anyone else on the network who might try to access it.
 
 For extra protection, you can tell your PC's firewall to only allow connections from your own Wi-Fi range:
 
@@ -233,6 +233,42 @@ New-NetFirewallRule -DisplayName "LZRD" -Direction Inbound -LocalPort 7734 -Prot
 ```bash
 sudo ufw allow from 192.168.0.0/16 to any port 7734
 ```
+
+---
+
+## Remote access via Caddy (access from anywhere)
+
+If you want to control your PC from outside your home network — from a coffee shop, at work, or anywhere — you can put LZRD behind [Caddy](https://caddyserver.com/), a free reverse proxy that adds HTTPS automatically.
+
+### What you need
+
+- A domain name pointed at your home/server's public IP address
+- Ports **80** and **443** open in your router/firewall (for Caddy + Let's Encrypt)
+- [Caddy installed](https://caddyserver.com/docs/install) on the same machine running LZRD
+
+### Step 1 — Configure LZRD for proxy mode
+
+Open `config.ini` and add these two settings:
+
+```ini
+[server]
+behind_proxy = true
+public_url   = https://lzrd.yourdomain.com
+```
+
+`behind_proxy = true` tells LZRD to read the real client IP from the `X-Forwarded-For` header that Caddy adds, so that per-IP rate limiting works correctly for remote users.
+
+### Step 2 — Set up Caddy
+
+A ready-to-use `Caddyfile` is included in the repository. Edit it to replace `lzrd.yourdomain.com` with your actual domain, then run:
+
+```bash
+caddy run --config Caddyfile
+```
+
+Caddy will automatically obtain and renew a TLS certificate from Let's Encrypt.  Once it is running, open `https://lzrd.yourdomain.com` on your phone — everything works exactly the same as on your local network, and with HTTPS you get the full PWA install experience on iOS Safari too.
+
+> **Security reminder:** Your LZRD token is now your only protection against the wider internet.  Make sure it is a strong, unique passphrase (LZRD generates a secure random token automatically on first run).
 
 ---
 

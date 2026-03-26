@@ -44,6 +44,7 @@ import pystray
 from flask import Flask, Response, jsonify, request, send_from_directory
 from PIL import Image, ImageDraw
 from pynput import mouse as pynput_mouse
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 # ---------------------------------------------------------------------------
 # Paths / Platform
@@ -705,7 +706,19 @@ def main() -> None:
     _token_bytes = _token.encode("utf-8")
     port = config.getint("server", "port", fallback=7734)
     local_ip = get_local_ip()
-    server_url = f"http://{local_ip}:{port}"
+
+    behind_proxy = config.getboolean("server", "behind_proxy", fallback=False)
+    if behind_proxy:
+        # Trust one proxy hop so that request.remote_addr reflects the real
+        # client IP (read from X-Forwarded-For set by Caddy / nginx / etc.).
+        # This is required for per-IP rate limiting to work correctly when
+        # LZRD is accessed remotely through a reverse proxy.
+        _flask_app.wsgi_app = ProxyFix(
+            _flask_app.wsgi_app, x_for=1, x_proto=1, x_host=1
+        )
+
+    public_url = config.get("server", "public_url", fallback="").strip()
+    server_url = public_url if public_url else f"http://{local_ip}:{port}"
 
     _ensure_pwa_icons()
 
