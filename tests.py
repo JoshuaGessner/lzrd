@@ -144,6 +144,47 @@ class TestLoadConfig(unittest.TestCase):
 
 
 # ---------------------------------------------------------------------------
+# TestProxyConfig
+# ---------------------------------------------------------------------------
+
+class TestProxyConfig(unittest.TestCase):
+    """Tests for the behind_proxy and public_url configuration options."""
+
+    def _make_config_with_proxy(self, behind_proxy: str = "false", public_url: str = "") -> configparser.ConfigParser:
+        cfg = configparser.ConfigParser()
+        server_section = {"port": "7734", "token": "testtoken", "behind_proxy": behind_proxy}
+        if public_url:
+            server_section["public_url"] = public_url
+        cfg["server"] = server_section
+        cfg["lzrd"] = {"movement_threshold": "10"}
+        return cfg
+
+    def test_behind_proxy_defaults_to_false(self):
+        """behind_proxy should default to False when absent from config."""
+        cfg = configparser.ConfigParser()
+        cfg["server"] = {"port": "7734", "token": "testtoken"}
+        cfg["lzrd"] = {"movement_threshold": "10"}
+        self.assertFalse(cfg.getboolean("server", "behind_proxy", fallback=False))
+
+    def test_behind_proxy_true_is_read_correctly(self):
+        """behind_proxy = true should be readable as a boolean True."""
+        cfg = self._make_config_with_proxy(behind_proxy="true")
+        self.assertTrue(cfg.getboolean("server", "behind_proxy", fallback=False))
+
+    def test_public_url_is_read_when_set(self):
+        """public_url should be readable from config when present."""
+        cfg = self._make_config_with_proxy(public_url="https://lzrd.example.com")
+        val = cfg.get("server", "public_url", fallback="").strip()
+        self.assertEqual(val, "https://lzrd.example.com")
+
+    def test_public_url_defaults_to_empty(self):
+        """public_url should default to an empty string when absent."""
+        cfg = self._make_config_with_proxy()
+        val = cfg.get("server", "public_url", fallback="").strip()
+        self.assertEqual(val, "")
+
+
+# ---------------------------------------------------------------------------
 # TestLZRDArming
 # ---------------------------------------------------------------------------
 
