@@ -1,0 +1,127 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0d1117" />
+  <meta name="mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-capable" content="yes" />
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+  <meta name="apple-mobile-web-app-title" content="LZRD" />
+  <title>LZRD</title>
+  <link rel="manifest" href="/manifest.json" />
+  <link rel="icon" href="/icon.svg" type="image/svg+xml" />
+  <link rel="apple-touch-icon" href="/icons/icon-192.png" />
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+
+  <header>
+    <div class="logo">
+      <img src="/icon.svg" alt="LZRD lizard icon" />
+      LZRD
+    </div>
+    <div class="conn-status">
+      <div id="conn-dot" class="conn-dot"></div>
+      <span id="conn-text">Offline</span>
+    </div>
+  </header>
+
+  <div id="alert-banner" class="alert-banner">
+    ⚠️ &nbsp;MOVEMENT DETECTED — CHECK YOUR PC
+  </div>
+
+  <main>
+    <!-- Status -->
+    <div class="status-card">
+      <div id="status-indicator" class="status-indicator"></div>
+      <div>
+        <div id="status-label" class="status-label">Disarmed</div>
+        <div id="status-sublabel" class="status-sublabel">Tap Arm to activate tripwire</div>
+      </div>
+    </div>
+
+    <!-- Arm / Disarm -->
+    <button id="btn-arm" class="btn-arm">Arm</button>
+
+    <!-- Remote controls -->
+    <div class="section-title">Remote Controls</div>
+    <div class="control-grid">
+
+      <button class="ctrl-btn danger" onclick="lockScreen()">
+        <span class="icon">🔒</span>
+        <span class="btn-label">Lock Screen</span>
+      </button>
+
+      <button id="btn-mouse-lock" class="ctrl-btn warning" onclick="toggleMouseLock()">
+        <span class="icon">🖱️</span>
+        <span class="btn-label">Lock Mouse</span>
+      </button>
+
+      <button class="ctrl-btn danger" onclick="confirmShutdown()">
+        <span class="icon">⏻</span>
+        <span class="btn-label">Shutdown</span>
+      </button>
+
+      <button class="ctrl-btn warning" onclick="confirmRestart()">
+        <span class="icon">🔄</span>
+        <span class="btn-label">Restart</span>
+      </button>
+
+      <button class="ctrl-btn info" onclick="showMessageDialog()">
+        <span class="icon">💬</span>
+        <span class="btn-label">Message</span>
+      </button>
+
+      <button class="ctrl-btn info" onclick="showLaunchDialog()">
+        <span class="icon">🚀</span>
+        <span class="btn-label">Launch App</span>
+      </button>
+
+    </div>
+  </main>
+
+  <!-- Token modal -->
+  <div id="token-modal" class="modal-overlay">
+    <div class="modal">
+      <h2>🦎 Connect to LZRD</h2>
+      <p>Enter the access token from your <code>config.ini</code> (or use "Show Access Token" from the tray menu).</p>
+      <input id="token-input" type="password" placeholder="Access token" autocomplete="off" />
+      <div class="modal-actions">
+        <button id="btn-connect" class="btn-primary">Connect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Message dialog -->
+  <div id="msg-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h2>💬 Display Message</h2>
+      <p>Shows a pop-up message box on the PC screen.</p>
+      <textarea id="msg-input" placeholder="Enter your message…" rows="3"></textarea>
+      <div class="modal-actions">
+        <button id="btn-msg-cancel" class="btn-cancel">Cancel</button>
+        <button id="btn-msg-send" class="btn-primary">Send</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Launch app dialog -->
+  <div id="launch-modal" class="modal-overlay hidden">
+    <div class="modal">
+      <h2>🚀 Launch Application</h2>
+      <p>Run a program or command on the PC.</p>
+      <input id="launch-input" type="text" placeholder="e.g. notepad.exe or C:\app.exe" />
+      <div class="modal-actions">
+        <button id="btn-launch-cancel" class="btn-cancel">Cancel</button>
+        <button id="btn-launch-go" class="btn-primary">Launch</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Toast container -->
+  <div id="toast-container" class="toast-container"></div>
+
+  <script src="/app.js"></script>
+</body>
+</html>

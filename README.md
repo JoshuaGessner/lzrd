@@ -1,14 +1,29 @@
 # LZRD
 
-A minimalist Windows tripwire for when you're away from your PC.
+A minimalist Windows tripwire and remote-control app for when you're away from your PC.
 
-When **armed**, LZRD watches for mouse movement. The moment the mouse moves
-beyond a configurable threshold it:
+When **armed**, LZRD watches for mouse movement. The moment the mouse moves beyond a configurable
+threshold it sends a real-time alert to any phone browser connected via the built-in
+**Progressive Web App (PWA)** — no Twilio account, no third-party service required.
 
-1. Sends an **SMS alert** to your phone via [Twilio](https://www.twilio.com).
-2. Starts polling your Twilio number for an inbound reply.
-3. If the reply contains the configured lock keyword (default: `lock`), it
-   immediately **locks the Windows workstation**.
+![LZRD PWA screenshot](https://github.com/user-attachments/assets/8a3b4912-7a78-4e99-971a-7c376dea8da2)
+
+---
+
+## Features
+
+| Control | Description |
+|---------|-------------|
+| 🔒 **Lock Screen** | Lock the Windows workstation immediately |
+| 🖱️ **Lock Mouse** | Confine the cursor to its current position (toggle) |
+| ⏻ **Shutdown** | Shut down the PC (5-second delay) |
+| 🔄 **Restart** | Restart the PC (5-second delay) |
+| 💬 **Message** | Show a pop-up message box on the PC screen |
+| 🚀 **Launch App** | Run any application or command on the PC |
+
+The app also lets you **Arm / Disarm** the mouse-movement tripwire directly from the web UI.
+Movement alerts are delivered instantly via **Server-Sent Events** and trigger a haptic vibration
+on the phone.
 
 ---
 
@@ -16,7 +31,7 @@ beyond a configurable threshold it:
 
 - Windows 10 / 11
 - Python 3.10+
-- A free [Twilio](https://www.twilio.com/try-twilio) account with a phone number
+- Your phone and PC on the **same Wi-Fi network** (no internet required)
 
 ---
 
@@ -34,18 +49,15 @@ pip install -r requirements.txt
 copy config.ini.example config.ini
 ```
 
-Edit `config.ini` and fill in your Twilio credentials and phone numbers:
+Edit `config.ini` and (at minimum) set a strong access token:
 
 ```ini
-[twilio]
-account_sid  = ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-auth_token   = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
-from_number  = +12025550100   ; your Twilio number
-to_number    = +12025550199   ; your personal mobile number
+[server]
+port  = 7734
+token = your-strong-passphrase-here
 
 [lzrd]
-movement_threshold = 10   ; pixels the mouse must move to trigger an alert
-lock_keyword       = lock ; reply with this word to lock the PC
+movement_threshold = 10
 ```
 
 ---
@@ -56,22 +68,29 @@ lock_keyword       = lock ; reply with this word to lock the PC
 python lzrd.py
 ```
 
-A small lizard icon appears in the system tray.
+A small lizard icon appears in the Windows system tray. Hover over it to see the server URL
+(e.g. `http://192.168.1.100:7734`).
 
-| Tray action | Description |
-|-------------|-------------|
-| **Arm**     | Capture current cursor position and start monitoring |
-| **Disarm**  | Stop monitoring without locking |
-| **Lock Now**| Immediately lock the workstation |
-| **Exit**    | Quit the application |
+### Connecting your phone
+
+1. Make sure your phone is on the same Wi-Fi network as your PC.
+2. Open the URL shown in the tray tooltip in your phone's browser.
+3. When prompted, enter the access token from your `config.ini`  
+   (or right-click the tray icon → **Show Access Token**).
+4. The token is stored in `localStorage` — you only enter it once.
+
+### Installing as a PWA (Android Chrome)
+
+1. Open the URL in Chrome for Android.
+2. Tap the menu → **Add to Home screen** → **Install**.
+3. LZRD now opens as a standalone app, just like a native app.
 
 ### Typical workflow
 
-1. Sit down, run `lzrd.py`, and click **Arm** from the tray menu.
-2. Walk away — LZRD records the cursor position.
-3. If someone touches the mouse, you receive an SMS:
-   > *LZRD Alert: Mouse movement detected! Reply 'lock' to lock.*
-4. Reply **lock** (or whatever keyword you configured) and your PC locks.
+1. Sit down at your PC, run `lzrd.py`, and tap **Arm** in the web UI (or from the tray menu).
+2. Walk away.
+3. If someone touches the mouse, your phone vibrates and shows a red **MOVEMENT DETECTED** banner.
+4. Use the control buttons to lock the screen, shut down, or take other action remotely.
 
 ---
 
@@ -79,16 +98,26 @@ A small lizard icon appears in the system tray.
 
 | Key | Default | Description |
 |-----|---------|-------------|
-| `twilio.account_sid` | — | Twilio Account SID (required) |
-| `twilio.auth_token` | — | Twilio Auth Token (required) |
-| `twilio.from_number` | — | Your Twilio phone number (E.164) |
-| `twilio.to_number` | — | Your personal mobile number (E.164) |
-| `lzrd.movement_threshold` | `10` | Pixel radius before alert fires |
-| `lzrd.lock_keyword` | `lock` | Case-insensitive reply word that locks the PC |
+| `server.port` | `7734` | TCP port the web server listens on |
+| `server.token` | `changeme` | Access token — change this before use |
+| `lzrd.movement_threshold` | `10` | Pixel radius before the alert fires |
+
+---
+
+## PWA notes
+
+- **HTTP is sufficient** for local network use on Android Chrome.
+- **iOS Safari** requires HTTPS for service-worker installation. For HTTPS, place a reverse proxy
+  (nginx, Caddy) with a self-signed certificate in front of the Flask server.
+- Service worker caches the app shell so the UI loads even if the PC is unreachable (controls
+  will fail gracefully with an error toast).
 
 ---
 
 ## Security note
 
-`config.ini` contains sensitive credentials — **never commit it to version
-control**.  It is listed in `.gitignore` by default.
+`config.ini` contains your access token — **never commit it to version control**.
+It is listed in `.gitignore` by default.
+The web server is only accessible to devices on the same local network.
+For additional security, configure your Windows Firewall to restrict access to port 7734.
+

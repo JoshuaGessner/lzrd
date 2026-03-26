@@ -1,5 +1,8 @@
-# User config — contains secrets, never commit
+# User config — contains the access token, never commit
 config.ini
+
+# Generated PWA icons (created at runtime by lzrd.py)
+web/icons/
 
 # Python
 __pycache__/

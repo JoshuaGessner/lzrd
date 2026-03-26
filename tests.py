@@ -1,9 +1,10 @@
 """
-Unit tests for LZRD core logic.
+Unit tests for LZRD core logic and Flask API.
 These tests mock all platform-specific dependencies so they run on any OS.
 """
 
 import configparser
+import queue
 import sys
 import threading
 import types
@@ -12,11 +13,10 @@ from unittest.mock import MagicMock, patch
 
 
 # ---------------------------------------------------------------------------
-# Build a minimal stub for pynput.mouse so the module can be imported
-# without a display server.
+# Platform stubs — must be installed before importing lzrd
 # ---------------------------------------------------------------------------
 
-def _make_pynput_stub():
+def _make_pynput_stub() -> None:
     pynput = types.ModuleType("pynput")
     pynput_mouse = types.ModuleType("pynput.mouse")
 
@@ -36,7 +36,7 @@ def _make_pynput_stub():
     sys.modules["pynput.mouse"] = pynput_mouse
 
 
-def _make_pystray_stub():
+def _make_pystray_stub() -> None:
     pystray = types.ModuleType("pystray")
 
     class FakeMenu:
@@ -70,60 +70,27 @@ def _make_pystray_stub():
     sys.modules["pystray"] = pystray
 
 
-def _make_twilio_stub():
-    twilio = types.ModuleType("twilio")
-    twilio_rest = types.ModuleType("twilio.rest")
-
-    class FakeClient:
-        def __init__(self, *args, **kwargs):
-            self.messages = MagicMock()
-
-    twilio_rest.Client = FakeClient
-    twilio.rest = twilio_rest
-    sys.modules["twilio"] = twilio
-    sys.modules["twilio.rest"] = twilio_rest
-
-
 # Install stubs before importing lzrd
 _make_pynput_stub()
 _make_pystray_stub()
-_make_twilio_stub()
 
-# Now we can safely import lzrd
-import importlib
-import lzrd as lzrd_module
+import lzrd as lzrd_module  # noqa: E402  (must come after stubs)
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Config helper
 # ---------------------------------------------------------------------------
 
-def _make_config(
-    account_sid="ACtest",
-    auth_token="token",
-    from_number="+10000000000",
-    to_number="+19999999999",
-    threshold="10",
-    lock_keyword="lock",
-) -> configparser.ConfigParser:
+def _make_config(threshold: str = "10") -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
-    cfg["twilio"] = {
-        "account_sid": account_sid,
-        "auth_token": auth_token,
-        "from_number": from_number,
-        "to_number": to_number,
-    }
-    cfg["lzrd"] = {
-        "movement_threshold": threshold,
-        "lock_keyword": lock_keyword,
-    }
+    cfg["server"] = {"port": "7734", "token": "testtoken"}
+    cfg["lzrd"] = {"movement_threshold": threshold}
     return cfg
 
 
 # ---------------------------------------------------------------------------
-# Tests
+# TestLZRDArming
 # ---------------------------------------------------------------------------
-
 
 class TestLZRDArming(unittest.TestCase):
     def setUp(self):
@@ -132,7 +99,7 @@ class TestLZRDArming(unittest.TestCase):
     def test_initial_state_is_disarmed(self):
         app = lzrd_module.LZRD(self.cfg)
         self.assertFalse(app.armed)
-        self.assertFalse(app.alert_sent)
+        self.assertFalse(app.alert_triggered)
 
     def test_arm_sets_armed_true(self):
         app = lzrd_module.LZRD(self.cfg)
@@ -154,23 +121,24 @@ class TestLZRDArming(unittest.TestCase):
             app.arm()
         app.disarm()
         self.assertFalse(app.armed)
-        self.assertFalse(app.alert_sent)
+        self.assertFalse(app.alert_triggered)
 
     def test_disarm_is_idempotent(self):
         app = lzrd_module.LZRD(self.cfg)
-        # Should not raise even when already disarmed
-        app.disarm()
+        app.disarm()  # should not raise when already disarmed
         self.assertFalse(app.armed)
 
+
+# ---------------------------------------------------------------------------
+# TestLZRDMovementDetection
+# ---------------------------------------------------------------------------
 
 class TestLZRDMovementDetection(unittest.TestCase):
     def setUp(self):
         self.cfg = _make_config(threshold="10")
 
-    def _armed_app(self, initial_pos=(100, 100)):
+    def _armed_app(self, initial_pos: tuple = (100, 100)) -> lzrd_module.LZRD:
         app = lzrd_module.LZRD(self.cfg)
-        app._send_alert = MagicMock()
-        app._start_sms_poll = MagicMock()
         app.on_state_change = MagicMock()
         with patch.object(lzrd_module, "_get_cursor_pos", return_value=initial_pos):
             app.arm()
@@ -179,111 +147,234 @@ class TestLZRDMovementDetection(unittest.TestCase):
     def test_small_movement_does_not_trigger_alert(self):
         app = self._armed_app(initial_pos=(100, 100))
         app._on_move(105, 105)  # within 10-pixel threshold
-        self.assertFalse(app.alert_sent)
-        app._send_alert.assert_not_called()
+        self.assertFalse(app.alert_triggered)
 
     def test_large_movement_triggers_alert(self):
         app = self._armed_app(initial_pos=(100, 100))
         app._on_move(150, 100)  # 50 px beyond threshold
-        self.assertTrue(app.alert_sent)
-        app._send_alert.assert_called_once()
-        app._start_sms_poll.assert_called_once()
+        self.assertTrue(app.alert_triggered)
 
     def test_alert_fires_only_once(self):
         app = self._armed_app(initial_pos=(100, 100))
+        state_changes_before = app.on_state_change.call_count
         app._on_move(200, 200)
-        app._on_move(300, 300)
-        app._send_alert.assert_called_once()
+        first_calls = app.on_state_change.call_count
+        app._on_move(300, 300)  # second big move — should be ignored
+        self.assertEqual(app.on_state_change.call_count, first_calls)
 
     def test_movement_not_detected_when_disarmed(self):
         app = self._armed_app(initial_pos=(100, 100))
         app.disarm()
+        app.on_state_change.reset_mock()
         app._on_move(200, 200)
-        app._send_alert.assert_not_called()
+        self.assertFalse(app.alert_triggered)
+        app.on_state_change.assert_not_called()
 
 
-class TestLZRDSMSPolling(unittest.TestCase):
+# ---------------------------------------------------------------------------
+# TestMouseLock
+# ---------------------------------------------------------------------------
+
+class TestMouseLock(unittest.TestCase):
     def setUp(self):
-        self.cfg = _make_config(lock_keyword="lock")
+        self.cfg = _make_config()
 
-    def test_lock_keyword_triggers_lock_and_disarm(self):
+    def test_toggle_locks_mouse(self):
         app = lzrd_module.LZRD(self.cfg)
-        app.armed = True
+        app.on_state_change = MagicMock()
+        with patch.object(lzrd_module, "lock_mouse_cursor") as mock_lock:
+            app.toggle_mouse_lock()
+        self.assertTrue(app.mouse_locked)
+        mock_lock.assert_called_once()
 
-        # Fake inbound message containing the lock keyword
-        fake_msg = MagicMock()
-        fake_msg.sid = "SM001"
-        fake_msg.body = "Lock the PC please"
-        app.twilio_client.messages.list.return_value = [fake_msg]
-
-        lock_called = threading.Event()
-        disarm_called = threading.Event()
-
-        with patch.object(lzrd_module, "lock_workstation", side_effect=lambda: lock_called.set()):
-            app.disarm = lambda: disarm_called.set()
-            app._poll_for_reply()
-
-        self.assertTrue(lock_called.is_set(), "lock_workstation should have been called")
-        self.assertTrue(disarm_called.is_set(), "disarm should have been called")
-
-    def test_non_lock_message_does_not_lock(self):
+    def test_toggle_unlocks_mouse(self):
         app = lzrd_module.LZRD(self.cfg)
-        app.armed = True
-        app._stop_event.set()  # single iteration
+        app.mouse_locked = True
+        app.on_state_change = MagicMock()
+        with patch.object(lzrd_module, "unlock_mouse_cursor") as mock_unlock:
+            app.toggle_mouse_lock()
+        self.assertFalse(app.mouse_locked)
+        mock_unlock.assert_called_once()
 
-        fake_msg = MagicMock()
-        fake_msg.sid = "SM002"
-        fake_msg.body = "Hello there"
-        app.twilio_client.messages.list.return_value = [fake_msg]
 
-        with patch.object(lzrd_module, "lock_workstation") as mock_lock:
-            app._poll_for_reply()
-            mock_lock.assert_not_called()
+# ---------------------------------------------------------------------------
+# TestBroadcast
+# ---------------------------------------------------------------------------
 
-    def test_case_insensitive_lock_keyword(self):
-        app = lzrd_module.LZRD(self.cfg)
-        app.armed = True
+class TestBroadcast(unittest.TestCase):
+    def setUp(self):
+        # Clear any leftover queues from other tests
+        lzrd_module._event_queues.clear()
 
-        fake_msg = MagicMock()
-        fake_msg.sid = "SM003"
-        fake_msg.body = "LOCK"
-        app.twilio_client.messages.list.return_value = [fake_msg]
+    def test_broadcast_delivers_to_all_queues(self):
+        q1: queue.Queue = queue.Queue()
+        q2: queue.Queue = queue.Queue()
+        lzrd_module._event_queues.extend([q1, q2])
+        try:
+            lzrd_module._broadcast({"type": "test", "value": 42})
+            self.assertEqual(q1.get_nowait(), {"type": "test", "value": 42})
+            self.assertEqual(q2.get_nowait(), {"type": "test", "value": 42})
+        finally:
+            lzrd_module._event_queues.clear()
 
-        lock_called = threading.Event()
-        with patch.object(lzrd_module, "lock_workstation", side_effect=lambda: lock_called.set()):
-            app.disarm = MagicMock()
-            app._poll_for_reply()
+    def test_broadcast_with_no_subscribers_is_safe(self):
+        # Should not raise
+        lzrd_module._broadcast({"type": "noop"})
 
-        self.assertTrue(lock_called.is_set())
 
-    def test_already_seen_message_does_not_trigger_lock(self):
-        app = lzrd_module.LZRD(self.cfg)
-        app.armed = True
-        app._stop_event.set()  # single iteration
+# ---------------------------------------------------------------------------
+# TestFlaskAPI
+# ---------------------------------------------------------------------------
 
-        fake_msg = MagicMock()
-        fake_msg.sid = "SM004"
-        fake_msg.body = "lock"
-        app._last_message_sid = "SM004"  # already processed
-        app.twilio_client.messages.list.return_value = [fake_msg]
+class TestFlaskAPI(unittest.TestCase):
+    def setUp(self):
+        self.cfg = _make_config()
+        lzrd_module._token = "testtoken"
+        lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
+        lzrd_module._lzrd.on_state_change = MagicMock()
+        self.client = lzrd_module._flask_app.test_client()
 
-        with patch.object(lzrd_module, "lock_workstation") as mock_lock:
-            app._poll_for_reply()
-            mock_lock.assert_not_called()
+    def tearDown(self):
+        lzrd_module._lzrd = None
 
+    # Helpers
+    def _get(self, url: str, token: str = "testtoken"):
+        return self.client.get(url, headers={"X-Token": token})
+
+    def _post(self, url: str, body=None, token: str = "testtoken"):
+        return self.client.post(url, json=body or {}, headers={"X-Token": token})
+
+    # Authentication
+    def test_status_unauthorized(self):
+        r = self._get("/api/status", token="wrong")
+        self.assertEqual(r.status_code, 401)
+
+    def test_arm_unauthorized(self):
+        r = self._post("/api/arm", token="wrong")
+        self.assertEqual(r.status_code, 401)
+
+    def test_events_unauthorized(self):
+        r = self._get("/api/events", token="wrong")
+        self.assertEqual(r.status_code, 401)
+
+    # Status
+    def test_status_returns_state(self):
+        r = self._get("/api/status")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertFalse(data["armed"])
+        self.assertFalse(data["alert"])
+        self.assertFalse(data["mouse_locked"])
+
+    # Arm / Disarm
+    def test_arm_and_disarm(self):
+        with patch.object(lzrd_module, "_get_cursor_pos", return_value=(0, 0)):
+            r = self._post("/api/arm")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(lzrd_module._lzrd.armed)
+
+        r = self._post("/api/disarm")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(lzrd_module._lzrd.armed)
+
+    # Lock screen
+    def test_lock_screen(self):
+        with patch.object(lzrd_module, "lock_workstation") as m:
+            r = self._post("/api/lock-screen")
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once()
+
+    # Lock mouse
+    def test_lock_mouse_toggle(self):
+        with patch.object(lzrd_module, "lock_mouse_cursor"):
+            r = self._post("/api/lock-mouse")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertTrue(data["mouse_locked"])
+
+    def test_unlock_mouse_toggle(self):
+        lzrd_module._lzrd.mouse_locked = True
+        with patch.object(lzrd_module, "unlock_mouse_cursor"):
+            r = self._post("/api/lock-mouse")
+        self.assertEqual(r.status_code, 200)
+        self.assertFalse(r.get_json()["mouse_locked"])
+
+    # Shutdown
+    def test_shutdown(self):
+        with patch.object(lzrd_module, "shutdown_computer") as m:
+            r = self._post("/api/shutdown")
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once()
+
+    # Restart
+    def test_restart(self):
+        with patch.object(lzrd_module, "restart_computer") as m:
+            r = self._post("/api/restart")
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once()
+
+    # Message
+    def test_message_sent(self):
+        with patch.object(lzrd_module, "display_message") as m:
+            r = self._post("/api/message", {"text": "hello world"})
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once_with("hello world")
+
+    def test_message_missing_text_returns_400(self):
+        r = self._post("/api/message", {})
+        self.assertEqual(r.status_code, 400)
+
+    def test_message_whitespace_only_returns_400(self):
+        r = self._post("/api/message", {"text": "   "})
+        self.assertEqual(r.status_code, 400)
+
+    # Launch app
+    def test_launch_app(self):
+        with patch.object(lzrd_module, "launch_app") as m:
+            r = self._post("/api/launch", {"path": "notepad.exe"})
+        self.assertEqual(r.status_code, 200)
+        m.assert_called_once_with("notepad.exe")
+
+    def test_launch_app_does_not_use_shell(self):
+        """launch_app must not invoke a shell (prevents shell injection)."""
+        with patch("subprocess.Popen") as mock_popen:
+            lzrd_module.launch_app("notepad.exe arg1")
+        mock_popen.assert_called_once()
+        _, kwargs = mock_popen.call_args
+        self.assertFalse(kwargs.get("shell", False), "shell=True would allow injection")
+    def test_launch_missing_path_returns_400(self):
+        r = self._post("/api/launch", {})
+        self.assertEqual(r.status_code, 400)
+
+
+# ---------------------------------------------------------------------------
+# TestIconRendering
+# ---------------------------------------------------------------------------
 
 class TestIconRendering(unittest.TestCase):
-    def test_armed_icon_is_green(self):
+    def test_armed_icon_size(self):
         from PIL import Image
         img = lzrd_module._make_icon_image(armed=True)
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (64, 64))
 
-    def test_disarmed_icon_is_grey(self):
+    def test_disarmed_icon_size(self):
         from PIL import Image
         img = lzrd_module._make_icon_image(armed=False)
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (64, 64))
+
+    def test_pwa_icon_size_192(self):
+        from PIL import Image
+        img = lzrd_module._make_pwa_icon(192)
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (192, 192))
+
+    def test_pwa_icon_size_512(self):
+        from PIL import Image
+        img = lzrd_module._make_pwa_icon(512)
+        self.assertIsInstance(img, Image.Image)
+        self.assertEqual(img.size, (512, 512))
 
 
 if __name__ == "__main__":
