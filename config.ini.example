@@ -19,3 +19,9 @@ behind_proxy = false
 [lzrd]
 # Pixels the mouse must travel from its armed position before an alert fires
 movement_threshold = 10
+
+[auth]
+# Owner credentials are created from the web UI on first launch.
+# Leave these empty in this example file.
+owner_username =
+owner_password_hash =

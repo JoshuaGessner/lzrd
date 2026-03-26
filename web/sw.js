@@ -1,4 +1,4 @@
-const CACHE = 'lzrd-v2';
+const CACHE = 'lzrd-app-v3';
 const SHELL = [
   '/',
   '/style.css',
@@ -12,7 +12,9 @@ const SHELL = [
 self.addEventListener('install', e => {
   e.waitUntil(
     caches.open(CACHE)
-      .then(c => c.addAll(SHELL))
+      .then(c => Promise.all(
+        SHELL.map(url => c.add(new Request(url, { cache: 'reload' })))
+      ))
       .then(() => self.skipWaiting())
   );
 });
@@ -31,16 +33,24 @@ self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   if (e.request.url.includes('/api/')) return;
 
-  e.respondWith(
-    caches.match(e.request).then(cached => {
-      if (cached) return cached;
-      return fetch(e.request).then(response => {
-        if (response.ok) {
-          const clone = response.clone();
-          caches.open(CACHE).then(c => c.put(e.request, clone));
-        }
-        return response;
+  e.respondWith((async () => {
+    try {
+      const networkResponse = await fetch(e.request, {
+        cache: e.request.mode === 'navigate' ? 'no-store' : 'no-cache',
       });
-    })
-  );
+      if (networkResponse && networkResponse.ok) {
+        const cache = await caches.open(CACHE);
+        cache.put(e.request, networkResponse.clone());
+      }
+      return networkResponse;
+    } catch {
+      const cached = await caches.match(e.request);
+      if (cached) return cached;
+      if (e.request.mode === 'navigate') {
+        const fallback = await caches.match('/');
+        if (fallback) return fallback;
+      }
+      throw new Error('Network unavailable and no cache entry');
+    }
+  })());
 });

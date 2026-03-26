@@ -1,14 +1,22 @@
 /* ── State ─────────────────────────────────────────────────────────────── */
-let token = localStorage.getItem('lzrd_token') || '';
 let evtSource = null;
 let armed = false;
 let alertActive = false;
 let mouseLocked = false;
 let currentPlatform = null;   // set from first SSE event; null = unknown
+let authMode = 'login';       // 'login' | 'setup'
+let reconnectTimer = null;
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
-const tokenModal    = document.getElementById('token-modal');
-const tokenInput    = document.getElementById('token-input');
+const authModal     = document.getElementById('auth-modal');
+const authTitle     = document.getElementById('auth-title');
+const authDesc      = document.getElementById('auth-desc');
+const authSetupToken = document.getElementById('auth-setup-token');
+const authUsername  = document.getElementById('auth-username');
+const authPassword  = document.getElementById('auth-password');
+const authPassword2 = document.getElementById('auth-password-confirm');
+const authError     = document.getElementById('auth-error');
+const btnAuthSubmit = document.getElementById('btn-auth-submit');
 const alertBanner   = document.getElementById('alert-banner');
 const btnArm        = document.getElementById('btn-arm');
 const statusInd     = document.getElementById('status-indicator');
@@ -56,26 +64,105 @@ function applyPlatform(platform) {
   }
 }
 
-/* ── Token modal ───────────────────────────────────────────────────────── */
-function showTokenModal() { tokenModal.classList.remove('hidden'); tokenInput.focus(); }
-function hideTokenModal() { tokenModal.classList.add('hidden'); }
+/* ── Auth modal ────────────────────────────────────────────────────────── */
+function setAuthMode(mode, errorText = '') {
+  authMode = mode;
+  authError.textContent = errorText;
+  authError.classList.toggle('hidden', !errorText);
 
-document.getElementById('btn-connect').addEventListener('click', () => {
-  const t = tokenInput.value.trim();
-  if (!t) return;
-  token = t;
-  localStorage.setItem('lzrd_token', token);
-  hideTokenModal();
-  connect();
+  if (mode === 'setup') {
+    authTitle.textContent = '🦎 Create Owner Account';
+    authDesc.textContent = 'First launch detected. Enter tray setup token, then create owner credentials.';
+    btnAuthSubmit.textContent = 'Create Account';
+    authSetupToken.classList.remove('hidden');
+    authPassword.setAttribute('autocomplete', 'new-password');
+    authPassword2.classList.remove('hidden');
+  } else {
+    authTitle.textContent = '🦎 Sign In';
+    authDesc.textContent = 'Enter your owner credentials.';
+    btnAuthSubmit.textContent = 'Sign In';
+    authSetupToken.classList.add('hidden');
+    authPassword.setAttribute('autocomplete', 'current-password');
+    authPassword2.classList.add('hidden');
+  }
+}
+
+function showAuthModal(mode, errorText = '') {
+  setAuthMode(mode, errorText);
+  authModal.classList.remove('hidden');
+  authUsername.focus();
+}
+
+function hideAuthModal() {
+  authModal.classList.add('hidden');
+  authError.classList.add('hidden');
+  authError.textContent = '';
+  authSetupToken.value = '';
+  authPassword.value = '';
+  authPassword2.value = '';
+}
+
+async function submitAuth() {
+  const setupToken = authSetupToken.value.trim().replace(/\s+/g, '');
+  const username = authUsername.value.trim();
+  const password = authPassword.value;
+  const password2 = authPassword2.value;
+
+  if (authMode === 'setup' && !setupToken) {
+    setAuthMode(authMode, 'Setup token is required.');
+    return;
+  }
+  if (!username || !password) {
+    setAuthMode(authMode, 'Username and password are required.');
+    return;
+  }
+  if (authMode === 'setup' && password !== password2) {
+    setAuthMode(authMode, 'Passwords do not match.');
+    return;
+  }
+
+  const endpoint = authMode === 'setup' ? '/api/auth/setup' : '/api/auth/login';
+  const setupHeaders = authMode === 'setup' ? { 'X-Token': setupToken } : {};
+  const res = await fetch(endpoint, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', ...setupHeaders },
+    credentials: 'same-origin',
+    body: JSON.stringify({ username, password }),
+  });
+
+  if (res.ok) {
+    hideAuthModal();
+    await connectAfterAuth();
+    return;
+  }
+
+  if (res.status === 409 && authMode === 'setup') {
+    showAuthModal('login', 'Owner account already exists. Sign in.');
+    return;
+  }
+  if (res.status === 429) {
+    showAuthModal(authMode, 'Too many attempts. Wait a moment and try again.');
+    return;
+  }
+  showAuthModal(authMode, authMode === 'setup' ? 'Could not create account.' : 'Invalid credentials.');
+}
+
+btnAuthSubmit.addEventListener('click', submitAuth);
+[authUsername, authPassword, authPassword2].forEach(el => {
+  el.addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
 });
-tokenInput.addEventListener('keydown', e => { if (e.key === 'Enter') document.getElementById('btn-connect').click(); });
+authSetupToken.addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
 
 /* ── SSE connection ────────────────────────────────────────────────────── */
 function connect() {
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
   if (evtSource) evtSource.close();
   setConn('connecting');
 
-  evtSource = new EventSource(`/api/events?token=${encodeURIComponent(token)}`);
+  evtSource = new EventSource('/api/events');
 
   evtSource.onopen = () => setConn('connected');
 
@@ -87,8 +174,17 @@ function connect() {
     setConn('disconnected');
     evtSource.close();
     evtSource = null;
-    if (token) setTimeout(connect, 5000);
+    handleDisconnect();
   };
+}
+
+async function handleDisconnect() {
+  const probe = await probeStatus();
+  if (!probe.ok && probe.status === 401) {
+    showAuthModal('login', 'Session expired. Sign in again.');
+    return;
+  }
+  reconnectTimer = setTimeout(connect, 5000);
 }
 
 function setConn(state) {
@@ -137,15 +233,84 @@ function updateUI() {
 /* ── API helper ────────────────────────────────────────────────────────── */
 async function api(path, body) {
   try {
-    const opts = { method: body !== undefined ? 'POST' : 'GET', headers: { 'X-Token': token } };
+    const opts = {
+      method: body !== undefined ? 'POST' : 'GET',
+      headers: {},
+      credentials: 'same-origin'
+    };
     if (body !== undefined) { opts.headers['Content-Type'] = 'application/json'; opts.body = JSON.stringify(body); }
     const res = await fetch(path, opts);
-    if (res.status === 401) { showToast('Access denied — check your token', 'error'); showTokenModal(); return null; }
+    if (res.status === 401) {
+      if (evtSource) {
+        evtSource.close();
+        evtSource = null;
+      }
+      setConn('disconnected');
+      showAuthModal('login', 'Sign in required.');
+      return null;
+    }
+    if (res.status === 429) {
+      showToast('Too many requests. Please wait a moment.', 'error');
+      return null;
+    }
     return res.json();
   } catch (err) {
     showToast('Network error', 'error');
     return null;
   }
+}
+
+async function probeStatus() {
+  try {
+    const res = await fetch('/api/status', {
+      method: 'GET',
+      headers: {},
+      credentials: 'same-origin'
+    });
+    const data = res.ok ? await res.json() : null;
+    return { ok: res.ok, status: res.status, data };
+  } catch (err) {
+    return { ok: false, status: 0, data: null };
+  }
+}
+
+async function connectAfterAuth() {
+  const status = await probeStatus();
+  if (!status.ok) {
+    showAuthModal('login', status.status === 429 ? 'Temporarily rate limited. Try again shortly.' : 'Sign in required.');
+    return;
+  }
+  handleEvent({ type: 'state', ...status.data });
+  connect();
+}
+
+async function initAuthFlow() {
+  // Cleanup legacy token storage now that sessions are preferred.
+  localStorage.removeItem('lzrd_token');
+
+  let bootstrap;
+  try {
+    const res = await fetch('/api/auth/bootstrap-status', { credentials: 'same-origin' });
+    bootstrap = await res.json();
+  } catch (err) {
+    showToast('Cannot reach server', 'error');
+    showAuthModal('login', 'Cannot reach server.');
+    return;
+  }
+
+  if (bootstrap.requires_setup) {
+    showAuthModal('setup');
+    return;
+  }
+
+  const status = await probeStatus();
+  if (!status.ok) {
+    showAuthModal('login');
+    return;
+  }
+  handleEvent({ type: 'state', ...status.data });
+  hideAuthModal();
+  connect();
 }
 
 /* ── Button handlers ───────────────────────────────────────────────────── */
@@ -206,7 +371,18 @@ function showToast(msg, type = '') {
 }
 
 /* ── Service worker ────────────────────────────────────────────────────── */
-if ('serviceWorker' in navigator) navigator.serviceWorker.register('/sw.js').catch(() => {});
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (window.__lzrdSwRefreshing) return;
+    window.__lzrdSwRefreshing = true;
+    window.location.reload();
+  });
+
+  navigator.serviceWorker.register('/sw.js').then(reg => {
+    reg.update().catch(() => {});
+    setInterval(() => reg.update().catch(() => {}), 60 * 1000);
+  }).catch(() => {});
+}
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
-if (!token) showTokenModal(); else connect();
+initAuthFlow();

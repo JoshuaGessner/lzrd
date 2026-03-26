@@ -4,7 +4,7 @@
 
 LZRD runs quietly in your PC's system tray and serves a mobile web app to any phone on the same Wi-Fi network. Arm the tripwire, walk away, and get an instant alert the moment anyone touches your mouse — then lock the screen, shut down, or take other action right from your phone.
 
-No accounts. No cloud services. No internet required.
+Local owner login. No cloud services. No internet required.
 
 ---
 
@@ -72,7 +72,7 @@ pip install -r requirements.txt
 python lzrd.py
 ```
 
-LZRD will create its config file automatically on first run and generate a secure access token for you.
+LZRD will create its config file automatically on first run and generate a secure access token for transport/auth fallback.
 
 ---
 
@@ -128,7 +128,7 @@ pip3 install -r requirements.txt
 python3 lzrd.py
 ```
 
-LZRD will create its config file automatically on first run and generate a secure access token for you.
+LZRD will create its config file automatically on first run and generate a secure access token for transport/auth fallback.
 
 ---
 
@@ -154,8 +154,9 @@ A small lizard icon appears in the system tray. Hover over it to see the address
 
 1. Make sure your phone is on the **same Wi-Fi network** as your PC.
 2. Open the address shown in the tray tooltip in your phone's browser.
-3. You'll be asked for the **access token** — right-click the tray icon and tap **Show Access Token** to find it.
-4. Your phone remembers the token, so you only need to enter it once.
+3. On first launch, enter the tray **access token** once to authorize ownership setup, then create **owner credentials** (username + password).
+4. On future visits, sign in with those owner credentials.
+5. The tray **access token** is still available for advanced/manual auth fallback and integrations.
 
 ---
 
@@ -213,14 +214,16 @@ Open `config.ini` in any text editor to change these settings. Restart LZRD afte
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `server.port` | `7734` | The port number the app listens on. Change it if something else is already using 7734. |
-| `server.token` | *(auto-generated)* | The passphrase you enter in the web app. Generated automatically on first run; use **Show Access Token** in the tray menu to view it. |
+| `server.token` | *(auto-generated)* | Secret used for token fallback auth and internal session signing. Use **Show Access Token** in the tray menu to view it. |
 | `lzrd.movement_threshold` | `10` | How many pixels the mouse must move before the alert fires. Lower = more sensitive. |
+| `auth.owner_username` | *(empty initially)* | Owner username created from the web UI on first launch. |
+| `auth.owner_password_hash` | *(empty initially)* | PBKDF2 hash of the owner password, created during first-launch setup. |
 
 ---
 
 ## Keeping LZRD private on your network
 
-By default, LZRD is only accessible to devices on your local Wi-Fi — it never connects to the internet on its own. Your access token protects it from anyone else on the network who might try to access it.
+By default, LZRD is only accessible to devices on your local Wi-Fi — it never connects to the internet on its own. Owner credentials protect the web UI, and the server token remains an additional secret used by fallback auth/session signing.
 
 For extra protection, you can tell your PC's firewall to only allow connections from your own Wi-Fi range:
 
@@ -268,11 +271,15 @@ caddy run --config Caddyfile
 
 Caddy will automatically obtain and renew a TLS certificate from Let's Encrypt.  Once it is running, open `https://lzrd.yourdomain.com` on your phone — everything works exactly the same as on your local network, and with HTTPS you get the full PWA install experience on iOS Safari too.
 
-> **Security reminder:** Your LZRD token is now your only protection against the wider internet.  Make sure it is a strong, unique passphrase (LZRD generates a secure random token automatically on first run).
+> **Security reminder:** Your owner password and LZRD token both matter for remote exposure. Keep the owner password strong, and keep the token unique (LZRD generates a secure random token automatically on first run).
 
 ---
 
 ## Troubleshooting
+
+**UI looks stale after updating LZRD**
+- Hard refresh once (`Ctrl+F5`) after upgrading.
+- LZRD now uses a network-first service worker strategy and explicit cache cleanup, so old assets should be replaced automatically on next load when online.
 
 **Phone can't reach the web app**  
 - Check that your phone and PC are on the same Wi-Fi network (not a guest network).  

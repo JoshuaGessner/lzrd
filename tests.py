@@ -87,6 +87,7 @@ def _make_config(threshold: str = "10") -> configparser.ConfigParser:
     cfg = configparser.ConfigParser()
     cfg["server"] = {"port": "7734", "token": "testtoken"}
     cfg["lzrd"] = {"movement_threshold": threshold}
+    cfg["auth"] = {"owner_username": "", "owner_password_hash": ""}
     return cfg
 
 
@@ -327,6 +328,9 @@ class TestFlaskAPI(unittest.TestCase):
         self.cfg = _make_config()
         lzrd_module._token = "testtoken"
         lzrd_module._token_bytes = b"testtoken"
+        lzrd_module._owner_username = ""
+        lzrd_module._owner_password_hash = ""
+        lzrd_module._config = self.cfg
         lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
         lzrd_module._lzrd.on_state_change = MagicMock()
         lzrd_module._failed_auth.clear()   # reset rate-limit state between tests
@@ -335,6 +339,9 @@ class TestFlaskAPI(unittest.TestCase):
     def tearDown(self):
         lzrd_module._lzrd = None
         lzrd_module._failed_auth.clear()
+        lzrd_module._owner_username = ""
+        lzrd_module._owner_password_hash = ""
+        lzrd_module._config = None
 
     # Helpers
     def _get(self, url: str, token: str = "testtoken"):
@@ -344,6 +351,48 @@ class TestFlaskAPI(unittest.TestCase):
         return self.client.post(url, json=body or {}, headers={"X-Token": token})
 
     # Authentication
+    def test_bootstrap_status_requires_setup_when_owner_missing(self):
+        r = self.client.get("/api/auth/bootstrap-status")
+        self.assertEqual(r.status_code, 200)
+        self.assertTrue(r.get_json()["requires_setup"])
+
+    def test_setup_then_cookie_auth_allows_status(self):
+        r = self.client.post(
+            "/api/auth/setup",
+            json={"username": "owner", "password": "strongpass123"},
+            headers={"X-Token": "testtoken"},
+        )
+        self.assertEqual(r.status_code, 200)
+        # Same test client keeps response cookies automatically.
+        r2 = self.client.get("/api/status")
+        self.assertEqual(r2.status_code, 200)
+
+    def test_setup_requires_valid_token(self):
+        r = self.client.post(
+            "/api/auth/setup",
+            json={"username": "owner", "password": "strongpass123"},
+            headers={"X-Token": "wrong"},
+        )
+        self.assertEqual(r.status_code, 401)
+
+    def test_login_sets_cookie_and_allows_status(self):
+        setup_client = lzrd_module._flask_app.test_client()
+        setup_client.post(
+            "/api/auth/setup",
+            json={"username": "owner", "password": "strongpass123"},
+            headers={"X-Token": "testtoken"},
+        )
+
+        login_client = lzrd_module._flask_app.test_client()
+        r = login_client.post(
+            "/api/auth/login",
+            json={"username": "owner", "password": "strongpass123"},
+        )
+        self.assertEqual(r.status_code, 200)
+
+        r2 = login_client.get("/api/status")
+        self.assertEqual(r2.status_code, 200)
+
     def test_status_unauthorized(self):
         r = self._get("/api/status", token="wrong")
         self.assertEqual(r.status_code, 401)
@@ -591,52 +640,97 @@ class TestCheckToken(unittest.TestCase):
         req = MagicMock()
         req.headers.get.return_value = header_token
         req.args.get.return_value = query_token
+        req.cookies.get.return_value = ""
+        req.remote_addr = "127.0.0.1"
         return req
 
     def test_empty_global_token_always_denies(self):
         """If _token is not configured (empty), all requests must be denied."""
         original_tok = lzrd_module._token
         original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
         try:
             lzrd_module._token = ""
             lzrd_module._token_bytes = b""
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
             self.assertFalse(lzrd_module._check_token(self._make_req("")))
         finally:
             lzrd_module._token = original_tok
             lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
 
     def test_correct_header_token_accepted(self):
         original_tok = lzrd_module._token
         original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
         try:
             lzrd_module._token = "secret"
             lzrd_module._token_bytes = b"secret"
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
             self.assertTrue(lzrd_module._check_token(self._make_req(header_token="secret")))
         finally:
             lzrd_module._token = original_tok
             lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
 
     def test_correct_query_token_accepted(self):
         original_tok = lzrd_module._token
         original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
         try:
             lzrd_module._token = "secret"
             lzrd_module._token_bytes = b"secret"
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
             self.assertTrue(lzrd_module._check_token(self._make_req(query_token="secret")))
         finally:
             lzrd_module._token = original_tok
             lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
+
+    def test_query_token_with_spaces_is_normalized_and_accepted(self):
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
+        try:
+            lzrd_module._token = "secret"
+            lzrd_module._token_bytes = b"secret"
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
+            self.assertTrue(
+                lzrd_module._check_token(self._make_req(query_token=" sec ret "))
+            )
+        finally:
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
 
     def test_wrong_token_rejected(self):
         original_tok = lzrd_module._token
         original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
         try:
             lzrd_module._token = "secret"
             lzrd_module._token_bytes = b"secret"
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
             self.assertFalse(lzrd_module._check_token(self._make_req("wrong")))
         finally:
             lzrd_module._token = original_tok
             lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
 
     def test_check_token_uses_constant_time_comparison(self):
         """_check_token must delegate to hmac.compare_digest (not plain ==)."""
@@ -644,9 +738,13 @@ class TestCheckToken(unittest.TestCase):
         req = self._make_req(header_token="testtoken")
         original_tok = lzrd_module._token
         original_bytes = lzrd_module._token_bytes
+        original_owner_user = lzrd_module._owner_username
+        original_owner_hash = lzrd_module._owner_password_hash
         try:
             lzrd_module._token = "testtoken"
             lzrd_module._token_bytes = b"testtoken"
+            lzrd_module._owner_username = ""
+            lzrd_module._owner_password_hash = ""
             with patch.object(hmac_module, "compare_digest", return_value=True) as mock_cd:
                 result = lzrd_module._check_token(req)
             mock_cd.assert_called_once()
@@ -654,6 +752,8 @@ class TestCheckToken(unittest.TestCase):
         finally:
             lzrd_module._token = original_tok
             lzrd_module._token_bytes = original_bytes
+            lzrd_module._owner_username = original_owner_user
+            lzrd_module._owner_password_hash = original_owner_hash
 
 
 # ---------------------------------------------------------------------------
@@ -668,6 +768,9 @@ class TestSecurity(unittest.TestCase):
         self.cfg = _make_config()
         lzrd_module._token = "testtoken"
         lzrd_module._token_bytes = b"testtoken"
+        lzrd_module._owner_username = ""
+        lzrd_module._owner_password_hash = ""
+        lzrd_module._config = self.cfg
         lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
         lzrd_module._lzrd.on_state_change = MagicMock()
         lzrd_module._failed_auth.clear()
@@ -676,6 +779,9 @@ class TestSecurity(unittest.TestCase):
     def tearDown(self):
         lzrd_module._lzrd = None
         lzrd_module._failed_auth.clear()
+        lzrd_module._owner_username = ""
+        lzrd_module._owner_password_hash = ""
+        lzrd_module._config = None
 
     # Helpers
     def _get(self, url: str, token: str = "testtoken"):
@@ -714,7 +820,10 @@ class TestSecurity(unittest.TestCase):
         for _ in range(lzrd_module._MAX_FAILED_AUTH):
             self._get("/api/status", token="wrong")
         r = self.client.get("/")
-        self.assertNotEqual(r.status_code, 429)
+        try:
+            self.assertNotEqual(r.status_code, 429)
+        finally:
+            r.close()
 
     # ── Security headers ───────────────────────────────────────────────────
 
@@ -736,9 +845,12 @@ class TestSecurity(unittest.TestCase):
     def test_security_headers_on_static_response(self):
         """Static file responses also carry the defensive headers."""
         r = self.client.get("/")
-        self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
-        self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
-        self.assertIn("default-src 'self'", r.headers.get("Content-Security-Policy", ""))
+        try:
+            self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+            self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
+            self.assertIn("default-src 'self'", r.headers.get("Content-Security-Policy", ""))
+        finally:
+            r.close()
 
     def test_no_cache_control_no_store_on_sse_route(self):
         """The SSE events endpoint must NOT receive Cache-Control: no-store."""

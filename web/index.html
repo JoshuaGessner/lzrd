@@ -84,14 +84,18 @@
     </div>
   </main>
 
-  <!-- Token modal -->
-  <div id="token-modal" class="modal-overlay">
+  <!-- Auth modal -->
+  <div id="auth-modal" class="modal-overlay">
     <div class="modal">
-      <h2>🦎 Connect to LZRD</h2>
-      <p>Enter the access token from your <code>config.ini</code> (or use "Show Access Token" from the tray menu).</p>
-      <input id="token-input" type="password" placeholder="Access token" autocomplete="off" />
+      <h2 id="auth-title">🦎 Connect to LZRD</h2>
+      <p id="auth-desc">Sign in to continue.</p>
+      <input id="auth-setup-token" class="hidden" type="password" placeholder="Setup token (from tray)" autocomplete="off" />
+      <input id="auth-username" type="text" placeholder="Owner username" autocomplete="username" />
+      <input id="auth-password" type="password" placeholder="Password" autocomplete="current-password" />
+      <input id="auth-password-confirm" class="hidden" type="password" placeholder="Confirm password" autocomplete="new-password" />
+      <div id="auth-error" class="form-error hidden"></div>
       <div class="modal-actions">
-        <button id="btn-connect" class="btn-primary">Connect</button>
+        <button id="btn-auth-submit" class="btn-primary">Sign In</button>
       </div>
     </div>
   </div>

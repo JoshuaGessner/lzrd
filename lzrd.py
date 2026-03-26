@@ -19,12 +19,13 @@ lets you:
 Usage:
   1. Run:  python lzrd.py
   2. Open the URL shown in the tray tooltip on your phone.
-  3. Enter the access token shown via "Show Access Token" in the tray menu once — it is stored locally.
+    3. On first launch, create owner credentials in the web UI; then sign in on future visits.
   4. Right-click the system-tray icon and choose "Arm", or use the web UI.
 """
 
 import configparser
 import ctypes
+import hashlib
 import hmac
 import json
 import logging
@@ -68,6 +69,7 @@ def load_config() -> configparser.ConfigParser:
         token = secrets.token_urlsafe(24)
         config["server"] = {"port": "7734", "token": token}
         config["lzrd"] = {"movement_threshold": "10"}
+        config["auth"] = {"owner_username": "", "owner_password_hash": ""}
         with CONFIG_FILE.open("w", encoding="utf-8") as fh:
             config.write(fh)
         print(f"[LZRD] Created {CONFIG_FILE} with a new random access token.")
@@ -330,8 +332,11 @@ _flask_app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # 16 KB — Flask returns 4
 
 # Set by main() before the server starts
 _lzrd: "LZRD | None" = None
+_config: configparser.ConfigParser | None = None
 _token: str = ""
 _token_bytes: bytes = b""   # pre-encoded form of _token; set alongside _token in main()
+_owner_username: str = ""
+_owner_password_hash: str = ""
 
 # ---------------------------------------------------------------------------
 # Security helpers
@@ -351,6 +356,120 @@ _AUTH_WINDOW_SECS = 60.0   # window length in seconds
 _rate_limit_lock = threading.Lock()
 _failed_auth: dict[str, list[float]] = {}  # ip -> [monotonic timestamps of failures]
 
+# Session/auth settings
+_SESSION_COOKIE_NAME = "lzrd_session"
+_SESSION_TTL_SECS = 60 * 60 * 24 * 30  # 30 days
+_MIN_USERNAME_LEN = 3
+_MAX_USERNAME_LEN = 64
+_MIN_PASSWORD_LEN = 8
+_MAX_PASSWORD_LEN = 256
+_PBKDF2_ITERATIONS = 200_000
+
+
+def _config_has_owner_credentials() -> bool:
+    return bool(_owner_username and _owner_password_hash)
+
+
+def _write_config() -> None:
+    """Persist current config state to config.ini."""
+    if _config is None:
+        return
+    with CONFIG_FILE.open("w", encoding="utf-8") as fh:
+        _config.write(fh)
+
+
+def _normalize_token(tok: str) -> str:
+    """Normalize copied tokens by stripping all whitespace characters."""
+    return "".join(tok.split())
+
+
+def _check_raw_token(req: "request") -> bool:
+    """Return True when the request carries a valid raw token value."""
+    if not _token_bytes:
+        return False
+    tok = req.headers.get("X-Token", "") or req.args.get("token", "")
+    tok = _normalize_token(tok)
+    if not tok:
+        _record_auth_failure(req.remote_addr or "")
+        return False
+    result = hmac.compare_digest(tok.encode("utf-8"), _token_bytes)
+    if not result:
+        _record_auth_failure(req.remote_addr or "")
+    return result
+
+
+def _hash_password(password: str) -> str:
+    """Return a PBKDF2-SHA256 password hash in a self-describing format."""
+    salt = secrets.token_bytes(16)
+    digest = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, _PBKDF2_ITERATIONS
+    )
+    return f"pbkdf2_sha256${_PBKDF2_ITERATIONS}${salt.hex()}${digest.hex()}"
+
+
+def _verify_password(password: str, encoded_hash: str) -> bool:
+    """Return True when *password* matches *encoded_hash*."""
+    try:
+        algo, iterations_s, salt_hex, digest_hex = encoded_hash.split("$", 3)
+        if algo != "pbkdf2_sha256":
+            return False
+        iterations = int(iterations_s)
+        salt = bytes.fromhex(salt_hex)
+        expected = bytes.fromhex(digest_hex)
+    except (ValueError, TypeError):
+        return False
+    computed = hashlib.pbkdf2_hmac(
+        "sha256", password.encode("utf-8"), salt, iterations
+    )
+    return hmac.compare_digest(computed, expected)
+
+
+def _make_session_cookie(username: str) -> str:
+    """Return an HMAC-signed session cookie value for *username*."""
+    expires = int(time.time() + _SESSION_TTL_SECS)
+    payload = f"{username}|{expires}".encode("utf-8")
+    signature = hmac.new(_token_bytes, payload, hashlib.sha256).hexdigest()
+    return f"{username}|{expires}|{signature}"
+
+
+def _verify_session_cookie(cookie_value: str) -> bool:
+    """Return True when *cookie_value* is a valid non-expired session."""
+    if not cookie_value or not _token_bytes:
+        return False
+    try:
+        username, expires_s, signature = cookie_value.split("|", 2)
+        expires = int(expires_s)
+    except ValueError:
+        return False
+    if not username or username != _owner_username:
+        return False
+    if expires < int(time.time()):
+        return False
+    payload = f"{username}|{expires}".encode("utf-8")
+    expected = hmac.new(_token_bytes, payload, hashlib.sha256).hexdigest()
+    return hmac.compare_digest(signature, expected)
+
+
+def _is_authenticated(req: "request") -> bool:
+    """Return True only if the request has a valid session or token."""
+    cookie_value = req.cookies.get(_SESSION_COOKIE_NAME, "")
+    if _verify_session_cookie(cookie_value):
+        return True
+
+    return _check_raw_token(req)
+
+
+def _set_auth_cookie(response: "Response") -> None:
+    """Set a hardened auth session cookie on *response*."""
+    response.set_cookie(
+        _SESSION_COOKIE_NAME,
+        _make_session_cookie(_owner_username),
+        max_age=_SESSION_TTL_SECS,
+        httponly=True,
+        secure=request.is_secure,
+        samesite="Strict",
+    )
+
 
 def _record_auth_failure(ip: str) -> None:
     """Append the current timestamp to the failure log for *ip*."""
@@ -368,16 +487,7 @@ def _check_token(req: "request") -> bool:
     ``_token_bytes`` is the pre-encoded form of the configured token so
     UTF-8 encoding only happens once at startup rather than on every request.
     """
-    if not _token_bytes:
-        return False
-    tok = req.headers.get("X-Token", "") or req.args.get("token", "")
-    if not tok:
-        _record_auth_failure(req.remote_addr or "")
-        return False
-    result = hmac.compare_digest(tok.encode("utf-8"), _token_bytes)
-    if not result:
-        _record_auth_failure(req.remote_addr or "")
-    return result
+    return _is_authenticated(req)
 
 
 def _unauthorized() -> tuple:
@@ -399,6 +509,25 @@ def _enforce_rate_limit():
             return jsonify({"error": "too many requests"}), 429
 
 
+@_flask_app.before_request
+def _enforce_fetch_site():
+    """Reject obvious cross-site unsafe requests that rely on cookie auth."""
+    if not request.path.startswith("/api/"):
+        return None
+    if request.method in {"GET", "HEAD", "OPTIONS"}:
+        return None
+    # Token-authenticated requests are not CSRF-prone in the same way.
+    has_token = bool(
+        _normalize_token(request.headers.get("X-Token", "") or request.args.get("token", ""))
+    )
+    if has_token:
+        return None
+    fetch_site = (request.headers.get("Sec-Fetch-Site", "") or "").lower()
+    if fetch_site and fetch_site not in {"same-origin", "same-site", "none"}:
+        return jsonify({"error": "forbidden"}), 403
+    return None
+
+
 @_flask_app.after_request
 def _add_security_headers(response):
     """Attach standard defensive HTTP headers to every response."""
@@ -406,10 +535,17 @@ def _add_security_headers(response):
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["Content-Security-Policy"] = "default-src 'self'"
     response.headers["Referrer-Policy"] = "no-referrer"
+    response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=()"
     # Prevent caching of API JSON responses.
     # The SSE endpoint manages its own Cache-Control header.
     if request.path.startswith("/api/") and request.path != "/api/events":
         response.headers["Cache-Control"] = "no-store"
+    elif request.path == "/":
+        response.headers["Cache-Control"] = "no-store, must-revalidate"
+    elif request.path == "/sw.js":
+        response.headers["Cache-Control"] = "no-cache, must-revalidate"
+    else:
+        response.headers["Cache-Control"] = "no-cache"
     return response
 
 
@@ -435,6 +571,69 @@ def api_status():
             "platform": PLATFORM,
         }
     )
+
+
+@_flask_app.route("/api/auth/bootstrap-status")
+def api_auth_bootstrap_status():
+    return jsonify({"requires_setup": not _config_has_owner_credentials()})
+
+
+@_flask_app.route("/api/auth/setup", methods=["POST"])
+def api_auth_setup():
+    global _owner_username, _owner_password_hash
+
+    if _config_has_owner_credentials():
+        return jsonify({"error": "owner already configured"}), 409
+    if not _check_raw_token(request):
+        return _unauthorized()
+
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+
+    if not (_MIN_USERNAME_LEN <= len(username) <= _MAX_USERNAME_LEN):
+        return jsonify({"error": "invalid username length"}), 400
+    if not (_MIN_PASSWORD_LEN <= len(password) <= _MAX_PASSWORD_LEN):
+        return jsonify({"error": "invalid password length"}), 400
+
+    _owner_username = username
+    _owner_password_hash = _hash_password(password)
+
+    if _config is not None:
+        if not _config.has_section("auth"):
+            _config.add_section("auth")
+        _config.set("auth", "owner_username", _owner_username)
+        _config.set("auth", "owner_password_hash", _owner_password_hash)
+        _write_config()
+
+    resp = jsonify({"ok": True})
+    _set_auth_cookie(resp)
+    return resp
+
+
+@_flask_app.route("/api/auth/login", methods=["POST"])
+def api_auth_login():
+    if not _config_has_owner_credentials():
+        return jsonify({"error": "owner setup required"}), 400
+
+    data = request.get_json(silent=True) or {}
+    username = str(data.get("username", "")).strip()
+    password = str(data.get("password", ""))
+
+    if username != _owner_username or not _verify_password(password, _owner_password_hash):
+        _record_auth_failure(request.remote_addr or "")
+        return _unauthorized()
+
+    resp = jsonify({"ok": True})
+    _set_auth_cookie(resp)
+    return resp
+
+
+@_flask_app.route("/api/auth/logout", methods=["POST"])
+def api_auth_logout():
+    resp = jsonify({"ok": True})
+    resp.delete_cookie(_SESSION_COOKIE_NAME)
+    return resp
 
 
 @_flask_app.route("/api/arm", methods=["POST"])
@@ -692,10 +891,11 @@ def _run_flask(port: int) -> None:
 
 
 def main() -> None:
-    global _lzrd, _token, _token_bytes
+    global _config, _lzrd, _token, _token_bytes, _owner_username, _owner_password_hash
 
     config = load_config()
-    _token = config.get("server", "token", fallback=_INSECURE_DEFAULT_TOKEN)
+    _config = config
+    _token = _normalize_token(config.get("server", "token", fallback=_INSECURE_DEFAULT_TOKEN))
     if _token == _INSECURE_DEFAULT_TOKEN:
         print(
             "[LZRD] FATAL: The access token is still set to the insecure default "
@@ -704,6 +904,8 @@ def main() -> None:
         )
         sys.exit(1)
     _token_bytes = _token.encode("utf-8")
+    _owner_username = config.get("auth", "owner_username", fallback="").strip()
+    _owner_password_hash = config.get("auth", "owner_password_hash", fallback="").strip()
     port = config.getint("server", "port", fallback=7734)
     local_ip = get_local_ip()
 

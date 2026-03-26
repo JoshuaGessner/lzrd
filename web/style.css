@@ -222,6 +222,12 @@ main {
 .modal input:focus, .modal textarea:focus { border-color: var(--green); }
 .modal textarea { resize: vertical; min-height: 76px; }
 
+.form-error {
+  color: var(--red);
+  font-size: 13px;
+  margin-bottom: 10px;
+}
+
 .modal-actions { display: flex; gap: 9px; }
 .modal-actions button { flex: 1; padding: 13px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
 .btn-primary { background: var(--green); color: var(--bg); }
