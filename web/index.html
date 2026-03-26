@@ -21,9 +21,12 @@
       <img src="/icon.svg" alt="LZRD lizard icon" />
       LZRD
     </div>
-    <div class="conn-status">
-      <div id="conn-dot" class="conn-dot"></div>
-      <span id="conn-text">Offline</span>
+    <div class="header-right">
+      <span id="platform-badge" class="platform-badge hidden"></span>
+      <div class="conn-status">
+        <div id="conn-dot" class="conn-dot"></div>
+        <span id="conn-text">Offline</span>
+      </div>
     </div>
   </header>
 
@@ -97,7 +100,7 @@
   <div id="msg-modal" class="modal-overlay hidden">
     <div class="modal">
       <h2>💬 Display Message</h2>
-      <p>Shows a pop-up message box on the PC screen.</p>
+      <p id="msg-desc">Shows a pop-up message box on the PC screen.</p>
       <textarea id="msg-input" placeholder="Enter your message…" rows="3"></textarea>
       <div class="modal-actions">
         <button id="btn-msg-cancel" class="btn-cancel">Cancel</button>
@@ -110,7 +113,7 @@
   <div id="launch-modal" class="modal-overlay hidden">
     <div class="modal">
       <h2>🚀 Launch Application</h2>
-      <p>Run a program or command on the PC.</p>
+      <p id="launch-desc">Run a program or command on the PC.</p>
       <input id="launch-input" type="text" placeholder="e.g. notepad.exe or C:\app.exe" />
       <div class="modal-actions">
         <button id="btn-launch-cancel" class="btn-cancel">Cancel</button>

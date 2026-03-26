@@ -342,6 +342,7 @@ def api_status():
             "armed": _lzrd.armed if _lzrd else False,
             "alert": _lzrd.alert_triggered if _lzrd else False,
             "mouse_locked": _lzrd.mouse_locked if _lzrd else False,
+            "platform": PLATFORM,
         }
     )
 
@@ -426,37 +427,40 @@ def api_events():
     if not _check_token(request):
         return _unauthorized()
 
-    def stream():
-        q: queue.Queue = queue.Queue()
-        with _event_queues_lock:
-            _event_queues.append(q)
-        try:
-            # Send current state immediately on connect
-            initial = {
-                "type": "state",
-                "armed": _lzrd.armed if _lzrd else False,
-                "alert": _lzrd.alert_triggered if _lzrd else False,
-                "mouse_locked": _lzrd.mouse_locked if _lzrd else False,
-            }
-            yield f"data: {json.dumps(initial)}\n\n"
-            while True:
-                try:
-                    event = q.get(timeout=25)
-                    yield f"data: {json.dumps(event)}\n\n"
-                except queue.Empty:
-                    yield ": heartbeat\n\n"
-        finally:
-            with _event_queues_lock:
-                try:
-                    _event_queues.remove(q)
-                except ValueError:
-                    pass
-
     return Response(
-        stream(),
+        _make_sse_stream(),
         mimetype="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+def _make_sse_stream():
+    """Generator that yields SSE-formatted data frames for connected clients."""
+    q: queue.Queue = queue.Queue()
+    with _event_queues_lock:
+        _event_queues.append(q)
+    try:
+        # Send current state immediately on connect
+        initial = {
+            "type": "state",
+            "armed": _lzrd.armed if _lzrd else False,
+            "alert": _lzrd.alert_triggered if _lzrd else False,
+            "mouse_locked": _lzrd.mouse_locked if _lzrd else False,
+            "platform": PLATFORM,
+        }
+        yield f"data: {json.dumps(initial)}\n\n"
+        while True:
+            try:
+                event = q.get(timeout=25)
+                yield f"data: {json.dumps(event)}\n\n"
+            except queue.Empty:
+                yield ": heartbeat\n\n"
+    finally:
+        with _event_queues_lock:
+            try:
+                _event_queues.remove(q)
+            except ValueError:
+                pass
 
 
 # ---------------------------------------------------------------------------

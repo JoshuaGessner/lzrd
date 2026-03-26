@@ -266,6 +266,15 @@ class TestFlaskAPI(unittest.TestCase):
         self.assertFalse(data["alert"])
         self.assertFalse(data["mouse_locked"])
 
+    def test_status_includes_platform(self):
+        """The /api/status response must include the current platform string."""
+        import platform as platform_module
+        r = self._get("/api/status")
+        self.assertEqual(r.status_code, 200)
+        data = r.get_json()
+        self.assertIn("platform", data)
+        self.assertEqual(data["platform"], platform_module.system())
+
     # Arm / Disarm
     def test_arm_and_disarm(self):
         with patch.object(lzrd_module, "_get_cursor_pos", return_value=(0, 0)):
@@ -276,6 +285,21 @@ class TestFlaskAPI(unittest.TestCase):
         r = self._post("/api/disarm")
         self.assertEqual(r.status_code, 200)
         self.assertFalse(lzrd_module._lzrd.armed)
+
+    def test_events_initial_state_includes_platform(self):
+        """The first SSE data frame must include the platform field."""
+        import json
+        import platform as platform_module
+
+        with lzrd_module._flask_app.app_context():
+            # Build the generator exactly as the route does.
+            gen = lzrd_module._make_sse_stream()
+            first_line = next(gen)  # "data: {...}\n\n"
+
+        self.assertTrue(first_line.startswith("data: "))
+        payload = json.loads(first_line[len("data: "):].strip())
+        self.assertIn("platform", payload)
+        self.assertEqual(payload["platform"], platform_module.system())
 
     # Lock screen
     def test_lock_screen(self):

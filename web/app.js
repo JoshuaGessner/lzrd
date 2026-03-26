@@ -4,6 +4,7 @@ let evtSource = null;
 let armed = false;
 let alertActive = false;
 let mouseLocked = false;
+let currentPlatform = null;   // set from first SSE event; null = unknown
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
 const tokenModal    = document.getElementById('token-modal');
@@ -20,6 +21,40 @@ const msgModal      = document.getElementById('msg-modal');
 const msgInput      = document.getElementById('msg-input');
 const launchModal   = document.getElementById('launch-modal');
 const launchInput   = document.getElementById('launch-input');
+const platformBadge = document.getElementById('platform-badge');
+const msgDesc       = document.getElementById('msg-desc');
+const launchDesc    = document.getElementById('launch-desc');
+
+/* ── Platform-aware UI ─────────────────────────────────────────────────── */
+function applyPlatform(platform) {
+  currentPlatform = platform;
+  const isWindows = platform === 'Windows';
+
+  // Header badge
+  if (platformBadge) {
+    platformBadge.textContent = isWindows ? '🪟 Windows' : '🐧 Linux';
+    platformBadge.classList.remove('hidden');
+  }
+
+  // Launch dialog: OS-appropriate placeholder and hint
+  if (launchInput) {
+    launchInput.placeholder = isWindows
+      ? 'e.g. notepad.exe or "C:\\Program Files\\app.exe"'
+      : 'e.g. firefox or /usr/bin/gedit';
+  }
+  if (launchDesc) {
+    launchDesc.textContent = isWindows
+      ? 'Run a program or command on the PC.'
+      : 'Run a command or application on the PC.';
+  }
+
+  // Message dialog: OS-appropriate description
+  if (msgDesc) {
+    msgDesc.textContent = isWindows
+      ? 'Shows a pop-up message box on the PC screen.'
+      : 'Shows a desktop notification on the PC.';
+  }
+}
 
 /* ── Token modal ───────────────────────────────────────────────────────── */
 function showTokenModal() { tokenModal.classList.remove('hidden'); tokenInput.focus(); }
@@ -64,8 +99,9 @@ function setConn(state) {
 /* ── Event handler ─────────────────────────────────────────────────────── */
 function handleEvent(data) {
   if (data.type === 'alert' && navigator.vibrate) navigator.vibrate([200, 100, 200]);
-  if (data.armed      !== undefined) armed       = data.armed;
-  if (data.alert      !== undefined) alertActive = data.alert;
+  if (data.platform     !== undefined) applyPlatform(data.platform);
+  if (data.armed        !== undefined) armed       = data.armed;
+  if (data.alert        !== undefined) alertActive = data.alert;
   if (data.mouse_locked !== undefined) mouseLocked = data.mouse_locked;
   updateUI();
 }
@@ -128,13 +164,13 @@ async function toggleMouseLock() {
 async function confirmShutdown() {
   if (!confirm('⚠️  Shut down the computer?')) return;
   const r = await api('/api/shutdown', {});
-  if (r?.ok) showToast('Shutdown in 5 s…', 'success');
+  if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Shutdown in 5 s…' : 'Shutting down…', 'success');
 }
 
 async function confirmRestart() {
   if (!confirm('🔄  Restart the computer?')) return;
   const r = await api('/api/restart', {});
-  if (r?.ok) showToast('Restart in 5 s…', 'success');
+  if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Restart in 5 s…' : 'Restarting…', 'success');
 }
 
 /* ── Message dialog ────────────────────────────────────────────────────── */
