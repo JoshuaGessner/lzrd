@@ -346,7 +346,7 @@ _owner_password_hash: str = ""
 _MAX_MESSAGE_LEN = 500   # characters
 _MAX_PATH_LEN = 260      # characters (matches Windows MAX_PATH)
 
-# The insecure default from config.ini.example — refused at startup.
+# The insecure default token value — refused at startup.
 _INSECURE_DEFAULT_TOKEN = "changeme"
 
 # Brute-force protection: track failed auth attempts per remote IP.

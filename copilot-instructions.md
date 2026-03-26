@@ -16,7 +16,7 @@ Primary files:
 - `web/index.html`, `web/app.js`, `web/style.css`: PWA UI and client logic.
 - `web/sw.js`, `web/manifest.json`: offline shell + installable app metadata.
 - `tests.py`: unit tests for core behavior and API/security contracts.
-- `config.ini(.example)`: runtime configuration.
+- `config.ini`: runtime configuration.
 - `scripts/generate_icons.py`: icon generation.
 
 ## High-Level Architecture
@@ -87,7 +87,7 @@ When modifying security/auth/rate-limit logic:
 - Ensure related tests in `tests.py` still pass or update tests with explicit rationale.
 
 ## Config and Ops Notes
-- Keep `config.ini.example` aligned with actual supported config keys.
+- Keep `config.ini` documentation aligned with supported config keys.
 - Keep README behavior/setup text aligned with implemented behavior.
 - If changing icon/theme assets, regenerate icons via `scripts/generate_icons.py` as needed.
 - If changing proxy/SSE behavior, verify Caddy guidance still matches expected behavior (especially SSE flushing).
@@ -98,4 +98,4 @@ When modifying security/auth/rate-limit logic:
 - Compatibility: Are Windows/Linux paths still safe?
 - API Contract: Does frontend still work with backend payloads?
 - Tests: Did relevant tests run and pass (or were updates justified)?
-- Docs/Config: Are README/config example updates needed?
+- Docs/Config: Are README/config updates needed?
