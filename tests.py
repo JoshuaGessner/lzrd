@@ -537,17 +537,47 @@ class TestIconRendering(unittest.TestCase):
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (64, 64))
 
-    def test_pwa_icon_size_192(self):
+    def test_load_tray_icon_from_asset_resized(self):
         from PIL import Image
-        img = lzrd_module._make_pwa_icon(192)
+        with tempfile.TemporaryDirectory() as tmpdir:
+            icon_path = Path(tmpdir) / "icon.png"
+            Image.new("RGBA", (192, 192), (255, 0, 0, 255)).save(icon_path)
+            with patch.object(lzrd_module, "TRAY_ICON_FILE", icon_path):
+                img = lzrd_module._load_tray_icon_image(armed=True)
         self.assertIsInstance(img, Image.Image)
-        self.assertEqual(img.size, (192, 192))
+        self.assertEqual(img.size, (64, 64))
 
-    def test_pwa_icon_size_512(self):
+    def test_load_tray_icon_falls_back_when_missing(self):
         from PIL import Image
-        img = lzrd_module._make_pwa_icon(512)
+        with patch.object(lzrd_module, "TRAY_ICON_FILE", Path("missing-file.png")):
+            img = lzrd_module._load_tray_icon_image(armed=False)
         self.assertIsInstance(img, Image.Image)
-        self.assertEqual(img.size, (512, 512))
+        self.assertEqual(img.size, (64, 64))
+
+
+class TestOwnerReset(unittest.TestCase):
+    def test_reset_owner_credentials_clears_config_and_globals(self):
+        cfg = _make_config()
+        cfg["auth"] = {
+            "owner_username": "owner",
+            "owner_password_hash": "pbkdf2_sha256$1$aa$bb",
+        }
+        original_cfg = lzrd_module._config
+        original_user = lzrd_module._owner_username
+        original_hash = lzrd_module._owner_password_hash
+        try:
+            lzrd_module._config = cfg
+            lzrd_module._owner_username = "owner"
+            lzrd_module._owner_password_hash = "pbkdf2_sha256$1$aa$bb"
+            self.assertTrue(lzrd_module._reset_owner_credentials())
+            self.assertEqual(lzrd_module._owner_username, "")
+            self.assertEqual(lzrd_module._owner_password_hash, "")
+            self.assertEqual(cfg.get("auth", "owner_username", fallback="x"), "")
+            self.assertEqual(cfg.get("auth", "owner_password_hash", fallback="x"), "")
+        finally:
+            lzrd_module._config = original_cfg
+            lzrd_module._owner_username = original_user
+            lzrd_module._owner_password_hash = original_hash
 
 
 # ---------------------------------------------------------------------------

@@ -140,6 +140,14 @@ async function submitAuth() {
     showAuthModal('login', 'Owner account already exists. Sign in.');
     return;
   }
+  if (res.status === 401 && authMode === 'setup') {
+    showAuthModal('setup', 'Invalid setup token. Use Show Access Token from tray.');
+    return;
+  }
+  if (res.status === 400 && authMode === 'login') {
+    showAuthModal('setup', 'No owner account found. Complete first-time setup.');
+    return;
+  }
   if (res.status === 429) {
     showAuthModal(authMode, 'Too many attempts. Wait a moment and try again.');
     return;

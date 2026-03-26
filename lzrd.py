@@ -53,6 +53,7 @@ from werkzeug.middleware.proxy_fix import ProxyFix
 
 CONFIG_FILE = Path(__file__).parent / "config.ini"
 WEB_DIR = Path(__file__).parent / "web"
+TRAY_ICON_FILE = WEB_DIR / "icons" / "icon-192.png"
 
 #: Current OS name: "Windows", "Linux", or "Darwin"
 PLATFORM = platform.system()
@@ -103,44 +104,22 @@ def _make_icon_image(armed: bool) -> Image.Image:
     return img
 
 
-def _make_pwa_icon(size: int) -> Image.Image:
-    """Return a PWA-sized icon (graphite background) for the web manifest."""
-    img = Image.new("RGBA", (size, size), (26, 26, 26, 255))
-    draw = ImageDraw.Draw(img)
-    s = size / 64
-    c = (109, 191, 74)   # lizard green
-
-    def sc(v: float) -> int:
-        return int(v * s)
-
-    # Body
-    draw.ellipse([sc(18), sc(24), sc(48), sc(42)], fill=c)
-    # Head
-    draw.ellipse([sc(38), sc(20), sc(56), sc(34)], fill=c)
-    # Snout
-    draw.polygon([(sc(53), sc(25)), (sc(63), sc(29)), (sc(53), sc(33))], fill=c)
-    # Eye
-    draw.ellipse([sc(50), sc(22), sc(55), sc(27)], fill=(255, 255, 255))
-    draw.ellipse([sc(51), sc(23), sc(54), sc(26)], fill=(26, 26, 26))
-    # Tail
-    draw.line([(sc(18), sc(34)), (sc(10), sc(40)), (sc(4), sc(52))], fill=c, width=max(1, sc(4)))
-    # Legs (rear upper, rear lower, front upper, front lower)
-    draw.line([(sc(25), sc(26)), (sc(19), sc(17))], fill=c, width=max(1, sc(3)))
-    draw.line([(sc(25), sc(40)), (sc(19), sc(50))], fill=c, width=max(1, sc(3)))
-    draw.line([(sc(39), sc(25)), (sc(45), sc(16))], fill=c, width=max(1, sc(3)))
-    draw.line([(sc(39), sc(40)), (sc(45), sc(50))], fill=c, width=max(1, sc(3)))
-    return img
-
-
-def _ensure_pwa_icons() -> None:
-    """Generate PWA icons into web/icons/ (always regenerate to pick up design changes)."""
+def _load_tray_icon_image(armed: bool) -> Image.Image:
+    """Load the tray icon from the committed asset file, with a code-drawn fallback."""
     try:
-        icons_dir = WEB_DIR / "icons"
-        icons_dir.mkdir(parents=True, exist_ok=True)
-        for px in (192, 512):
-            _make_pwa_icon(px).save(str(icons_dir / f"icon-{px}.png"))
-    except Exception as exc:
-        print(f"[LZRD] Warning: could not generate PWA icons: {exc}")
+        with Image.open(TRAY_ICON_FILE) as src:
+            icon = src.convert("RGBA")
+        try:
+            resampling = Image.Resampling.LANCZOS
+        except AttributeError:
+            resampling = Image.LANCZOS
+        icon = icon.resize((64, 64), resampling)
+        if not armed:
+            overlay = Image.new("RGBA", icon.size, (0, 0, 0, 110))
+            icon = Image.alpha_composite(icon, overlay)
+        return icon
+    except Exception:
+        return _make_icon_image(armed)
 
 
 # ---------------------------------------------------------------------------
@@ -376,6 +355,21 @@ def _write_config() -> None:
         return
     with CONFIG_FILE.open("w", encoding="utf-8") as fh:
         _config.write(fh)
+
+
+def _reset_owner_credentials() -> bool:
+    """Clear configured owner credentials and persist the change to config.ini."""
+    global _owner_username, _owner_password_hash
+    if _config is None:
+        return False
+    if not _config.has_section("auth"):
+        _config.add_section("auth")
+    _owner_username = ""
+    _owner_password_hash = ""
+    _config.set("auth", "owner_username", "")
+    _config.set("auth", "owner_password_hash", "")
+    _write_config()
+    return True
 
 
 def _normalize_token(tok: str) -> str:
@@ -922,8 +916,6 @@ def main() -> None:
     public_url = config.get("server", "public_url", fallback="").strip()
     server_url = public_url if public_url else f"http://{local_ip}:{port}"
 
-    _ensure_pwa_icons()
-
     _lzrd = LZRD(config)
 
     # Start Flask in a background daemon thread
@@ -939,12 +931,22 @@ def main() -> None:
         def _show_token(icon, item) -> None:
             display_message(f"Access token:\n\n{_token}")
 
+        def _reset_owner(icon, item) -> None:
+            if _reset_owner_credentials():
+                display_message(
+                    "Owner credentials were reset.\n\n"
+                    "Refresh the web app to create new first-time owner credentials."
+                )
+            else:
+                display_message("Could not reset owner credentials.")
+
         return pystray.Menu(
             pystray.MenuItem(server_url, lambda icon, item: None, enabled=False),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(arm_label, lambda icon, item: arm_action()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Show Access Token", _show_token),
+            pystray.MenuItem("Reset Owner Credentials", _reset_owner),
             pystray.MenuItem("Lock Screen Now", lambda icon, item: lock_workstation()),
             pystray.Menu.SEPARATOR,
             pystray.MenuItem("Exit", lambda icon, item: icon.stop()),
@@ -955,13 +957,13 @@ def main() -> None:
     # the Flask thread receives a request during startup.
     icon = pystray.Icon(
         name="LZRD",
-        icon=_make_icon_image(armed=False),
+        icon=_load_tray_icon_image(armed=False),
         title=f"LZRD — Disarmed 🔴 | {server_url}",
         menu=_build_menu(),
     )
 
     def _refresh_tray() -> None:
-        icon.icon = _make_icon_image(_lzrd.armed)
+        icon.icon = _load_tray_icon_image(_lzrd.armed)
         icon.title = f"LZRD — {'Armed 🟢' if _lzrd.armed else 'Disarmed 🔴'} | {server_url}"
         icon.menu = _build_menu()
 
