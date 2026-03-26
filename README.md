@@ -1,156 +1,291 @@
-# LZRD
+# 🦎 LZRD
 
-A minimalist tripwire and remote-control app for when you're away from your PC.
-Runs on **Windows 10/11** and **Linux** (X11 / systemd desktops).
+**Turn your phone into a remote control and security tripwire for your PC.**
 
-When **armed**, LZRD watches for mouse movement. The moment the mouse moves beyond a configurable
-threshold it sends a real-time alert to any phone browser connected via the built-in
-**Progressive Web App (PWA)** — no Twilio account, no third-party service required.
+LZRD runs quietly in your PC's system tray and serves a mobile web app to any phone on the same Wi-Fi network. Arm the tripwire, walk away, and get an instant alert the moment anyone touches your mouse — then lock the screen, shut down, or take other action right from your phone.
 
-![LZRD PWA screenshot](https://github.com/user-attachments/assets/8a3b4912-7a78-4e99-971a-7c376dea8da2)
+No accounts. No cloud services. No internet required.
 
 ---
 
-## Features
+## What can LZRD do?
 
-| Control | Description |
-|---------|-------------|
-| 🔒 **Lock Screen** | Lock the workstation (Win32 `LockWorkStation` / `loginctl lock-session` on Linux) |
-| 🖱️ **Lock Mouse** | Confine the cursor to its current position (toggle) |
-| ⏻ **Shutdown** | Shut down the PC |
-| 🔄 **Restart** | Restart the PC |
-| 💬 **Message** | Show a pop-up message box on the PC screen |
-| 🚀 **Launch App** | Run any application or command on the PC |
+| Action | What it does |
+|--------|-------------|
+| 🟢 **Arm / Disarm** | Watch for mouse movement and send an instant alert to your phone when triggered |
+| 🔒 **Lock Screen** | Immediately lock your PC's screen remotely |
+| 🖱️ **Lock Mouse** | Freeze the cursor in place so it cannot be moved |
+| ⏻ **Shutdown** | Remotely shut down your PC |
+| 🔄 **Restart** | Remotely restart your PC |
+| 💬 **Message** | Pop up a message box on your PC screen |
+| 🚀 **Launch App** | Open any application or run any command on your PC |
 
-The app also lets you **Arm / Disarm** the mouse-movement tripwire directly from the web UI.
-Movement alerts are delivered instantly via **Server-Sent Events** and trigger a haptic vibration
-on the phone.
+Movement alerts appear instantly with a flashing red banner and vibrate your phone.
 
 ---
 
-## Requirements
+## What you need
 
-- **Python 3.10+**
-- Your phone and PC on the **same Wi-Fi network** (no internet required)
+- A **Windows 10/11** or **Linux** desktop PC
+- **Python 3.10 or newer** installed on the PC ([download here](https://www.python.org/downloads/))
+- Your phone and PC connected to the **same Wi-Fi network**
+- Any modern mobile browser (Chrome for Android, Safari for iOS, etc.)
+
+> **Linux only:** You also need a desktop environment with a system-tray notification area (GNOME, KDE, XFCE, Cinnamon, etc. all work). If you use GNOME on Ubuntu, install one extra package before you start — see the Linux setup steps below.
+
+---
+
+## Setup
 
 ### Windows
-- Windows 10 / 11
 
-### Linux
-- A systemd desktop (Ubuntu, Fedora, Debian, Arch, etc.)
-- A desktop notification area for the system tray (`pystray` uses
-  [libappindicator3](https://packages.ubuntu.com/focal/gir1.2-appindicator3-0.1)
-  on GNOME; install it with `sudo apt install gir1.2-appindicator3-0.1` or the
-  equivalent for your distro)
-- For **Lock Screen**: at least one of `loginctl`, `xdg-screensaver`,
-  `gnome-screensaver-command`, `xscreensaver-command`, `cinnamon-screensaver-command`,
-  or `dm-tool` must be available (any standard Linux desktop has one)
-- For **Display Message**: `zenity`, `kdialog`, `notify-send`, or `xmessage`
-  (`sudo apt install zenity` covers GNOME/X11)
+**Step 1 — Install Python**
 
----
+Download and run the installer from [python.org](https://www.python.org/downloads/). On the first screen of the installer, tick **"Add Python to PATH"** before clicking Install.
 
-## Installation
+**Step 2 — Get LZRD**
 
-```bash
-# 1. Clone the repo
+Open **Command Prompt** (press `Win + R`, type `cmd`, press Enter) and run:
+
+```
 git clone https://github.com/JoshuaGessner/lzrd.git
 cd lzrd
-
-# 2. Install Python dependencies
-pip install -r requirements.txt
-
-# 3. (Linux only) Install the AppIndicator GObject introspection data
-#    so pystray can render the system tray icon:
-sudo apt install gir1.2-appindicator3-0.1   # Debian / Ubuntu
-# sudo dnf install libappindicator-gtk3      # Fedora
-
-# 4. Create your config file
-cp config.ini.example config.ini            # Linux / macOS
-copy config.ini.example config.ini          # Windows
 ```
 
-Edit `config.ini` and (at minimum) set a strong access token:
+If you don't have Git, download the ZIP directly from the GitHub page instead:
+1. Go to [github.com/JoshuaGessner/lzrd](https://github.com/JoshuaGessner/lzrd)
+2. Click **Code → Download ZIP**
+3. Extract the ZIP somewhere convenient (e.g. `C:\Users\You\lzrd`)
+4. Open Command Prompt and `cd` to that folder
+
+**Step 3 — Install dependencies**
+
+In the same Command Prompt window:
+
+```
+pip install -r requirements.txt
+```
+
+**Step 4 — Create your config file**
+
+```
+copy config.ini.example config.ini
+```
+
+Open `config.ini` in Notepad and change the `token` line to a passphrase only you know:
 
 ```ini
 [server]
 port  = 7734
-token = your-strong-passphrase-here
+token = my-secret-passphrase
 
 [lzrd]
 movement_threshold = 10
 ```
 
+Save the file. You're ready to go.
+
 ---
 
-## Usage
+### Linux
+
+**Step 1 — Install Python**
+
+Most Linux distributions include Python 3. Check with:
 
 ```bash
+python3 --version
+```
+
+If it prints `Python 3.10` or higher, you're good. Otherwise install it through your package manager:
+
+```bash
+# Ubuntu / Debian
+sudo apt install python3 python3-pip
+
+# Fedora
+sudo dnf install python3 python3-pip
+
+# Arch
+sudo pacman -S python python-pip
+```
+
+**Step 2 — Install the system tray helper (GNOME / Ubuntu only)**
+
+```bash
+sudo apt install gir1.2-appindicator3-0.1
+```
+
+On KDE, XFCE, Cinnamon, and most other desktops this step is not needed.
+
+**Step 3 — Get LZRD**
+
+```bash
+git clone https://github.com/JoshuaGessner/lzrd.git
+cd lzrd
+```
+
+No Git? Download the ZIP from [github.com/JoshuaGessner/lzrd](https://github.com/JoshuaGessner/lzrd) and extract it.
+
+**Step 4 — Install dependencies**
+
+```bash
+pip3 install -r requirements.txt
+```
+
+**Step 5 — Create your config file**
+
+```bash
+cp config.ini.example config.ini
+```
+
+Open `config.ini` in any text editor and set your token:
+
+```ini
+[server]
+port  = 7734
+token = my-secret-passphrase
+
+[lzrd]
+movement_threshold = 10
+```
+
+Save and close.
+
+---
+
+## Starting LZRD
+
+**Windows:**
+```
 python lzrd.py
 ```
 
-A small lizard icon appears in the system tray. Hover over it to see the server URL
-(e.g. `http://192.168.1.100:7734`).
+**Linux:**
+```bash
+python3 lzrd.py
+```
 
-> **Linux — no tray available?**  If `pystray` cannot attach to a notification area
-> (e.g. headless, or GNOME without AppIndicator), LZRD prints the server URL to the
-> terminal and keeps running.  The full web UI is still accessible from your phone.
+A small lizard icon appears in the system tray. Hover over it to see the address you need to open on your phone (for example `http://192.168.1.42:7734`).
 
-### Connecting your phone
+> **Tip:** If no tray icon appears (rare on some Linux setups), LZRD will print the address directly in the terminal window. The web app works exactly the same either way.
 
-1. Make sure your phone is on the same Wi-Fi network as your PC.
-2. Open the URL shown in the tray tooltip in your phone's browser.
-3. When prompted, enter the access token from your `config.ini`  
-   (or right-click the tray icon → **Show Access Token**).
-4. The token is stored in `localStorage` — you only enter it once.
+---
 
-### Installing as a PWA (Android Chrome)
+## Connecting your phone
 
-1. Open the URL in Chrome for Android.
-2. Tap the menu → **Add to Home screen** → **Install**.
-3. LZRD now opens as a standalone app, just like a native app.
+1. Make sure your phone is on the **same Wi-Fi network** as your PC.
+2. Open the address shown in the tray tooltip in your phone's browser.
+3. You'll be asked for the **access token** — this is the `token` value you set in `config.ini`.  
+   You can also right-click the tray icon and tap **Show Access Token** to remind yourself.
+4. Your phone remembers the token, so you only need to enter it once.
+
+---
+
+## Install LZRD as an app on your phone (optional)
+
+Installing LZRD as a Progressive Web App (PWA) makes it open like a real app with its own icon on your home screen — no app store required.
+
+### Android (Chrome)
+
+1. Open the LZRD address in **Chrome**.
+2. Tap the three-dot menu **(⋮)** → **Add to Home screen** → **Install**.
+3. LZRD appears on your home screen. Tap it to open it as a full-screen app.
+
+### iPhone / iPad (Safari)
+
+> iOS requires a secure connection for full PWA features.  
+> On a home network, Safari can still open the page and use it in the browser normally — use **Add to Home Screen** and it will work as a web clip (connection indicator and controls all function correctly).
+
+1. Open the LZRD address in **Safari**.
+2. Tap the **Share button** (the square with an arrow) → **Add to Home Screen** → **Add**.
+3. The LZRD icon appears on your home screen.
+
+---
+
+## Using LZRD
 
 ### Typical workflow
 
-1. Sit down at your PC, run `lzrd.py`, and tap **Arm** in the web UI (or from the tray menu).
-2. Walk away.
-3. If someone touches the mouse, your phone vibrates and shows a red **MOVEMENT DETECTED** banner.
-4. Use the control buttons to lock the screen, shut down, or take other action remotely.
+1. Run `lzrd.py` on your PC and open the web app on your phone.
+2. Tap **Arm** — the status indicator turns green and LZRD begins watching the mouse.
+3. Walk away from your PC.
+4. If anyone moves the mouse, your phone vibrates and shows a red **MOVEMENT DETECTED** banner.
+5. Use the control buttons to respond — lock the screen, shut down, or anything else — without touching your PC.
+6. Tap **Disarm** when you're back.
+
+### Control buttons
+
+| Button | What happens |
+|--------|-------------|
+| **Arm** | Start watching for mouse movement |
+| **Disarm** | Stop watching; clears any active alert |
+| **Lock Screen** | Instantly locks your PC (same as pressing Win + L) |
+| **Lock Mouse** | Prevents the cursor from moving; tap again to unlock |
+| **Shutdown** | Shows a confirmation, then shuts your PC down |
+| **Restart** | Shows a confirmation, then restarts your PC |
+| **Message** | Type a message and it appears as a pop-up on your PC screen |
+| **Launch App** | Enter a program name or full path and it opens on your PC |
 
 ---
 
-## Configuration reference
+## Settings
 
-| Key | Default | Description |
-|-----|---------|-------------|
-| `server.port` | `7734` | TCP port the web server listens on |
-| `server.token` | `changeme` | Access token — change this before use |
-| `lzrd.movement_threshold` | `10` | Pixel radius before the alert fires |
+Open `config.ini` in any text editor to change these settings. Restart LZRD after saving.
 
----
-
-## PWA notes
-
-- **HTTP is sufficient** for local network use on Android Chrome.
-- **iOS Safari** requires HTTPS for service-worker installation. For HTTPS, place a reverse proxy
-  (nginx, Caddy) with a self-signed certificate in front of the Flask server.
-- Service worker caches the app shell so the UI loads even if the PC is unreachable (controls
-  will fail gracefully with an error toast).
+| Setting | Default | Description |
+|---------|---------|-------------|
+| `server.port` | `7734` | The port number the app listens on. Change it if something else is already using 7734. |
+| `server.token` | *(you set this)* | The passphrase you enter in the web app. Use something only you know. |
+| `lzrd.movement_threshold` | `10` | How many pixels the mouse must move before the alert fires. Lower = more sensitive. |
 
 ---
 
-## Security note
+## Keeping LZRD private on your network
 
-`config.ini` contains your access token — **never commit it to version control**.
-It is listed in `.gitignore` by default.
-The web server is only accessible to devices on the same local network.
-For additional security, restrict access to port 7734 at the firewall:
+LZRD is only accessible to devices on your local Wi-Fi — it never connects to the internet. Your access token protects it from anyone else on the network who might try to access it.
 
-```bash
-# Windows (PowerShell — admin)
+For extra protection, you can tell your PC's firewall to only allow connections from your own Wi-Fi range:
+
+**Windows** (open PowerShell as Administrator):
+```powershell
 New-NetFirewallRule -DisplayName "LZRD" -Direction Inbound -LocalPort 7734 -Protocol TCP -Action Allow
+```
 
-# Linux (ufw)
+**Linux** (if you use `ufw`):
+```bash
 sudo ufw allow from 192.168.0.0/16 to any port 7734
 ```
+
+---
+
+## Troubleshooting
+
+**"Config file not found" when starting LZRD**  
+You haven't created your config file yet. Run `copy config.ini.example config.ini` (Windows) or `cp config.ini.example config.ini` (Linux) and then edit the `token` line.
+
+**"token must not be left as 'changeme'" error**  
+Open `config.ini` and change `token = changeme` to your own passphrase.
+
+**Phone can't reach the web app**  
+- Check that your phone and PC are on the same Wi-Fi network (not a guest network).  
+- Make sure you're using the address shown in the tray tooltip, not `localhost`.  
+- Temporarily disable your PC's firewall to test; if that fixes it, add a rule to allow port 7734.
+
+**No system tray icon on Linux**  
+LZRD will print the server address in the terminal — use that to connect. On Ubuntu/GNOME, install `gir1.2-appindicator3-0.1` (see Step 2 of the Linux setup above) and restart LZRD.
+
+**Movement alert doesn't vibrate my phone**  
+Vibration requires the LZRD page to be in the foreground. Install it as a PWA (see above) for the best experience.
+
+**Lock Mouse button doesn't work on Linux**  
+Mouse locking requires the `Xlib` Python package and an X11 display. Install it with `pip3 install python-xlib` and make sure you are running a graphical session (not SSH without X forwarding).
+
+---
+
+## Uninstalling
+
+1. Close LZRD (right-click the tray icon → **Exit**).
+2. Delete the `lzrd` folder.
+3. That's it — LZRD doesn't install anything system-wide.
 
