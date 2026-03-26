@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+  <!-- Graphite background -->
+  <rect width="64" height="64" rx="12" fill="#1a1a1a"/>
+  <!-- Tail: curves from back of body down-left -->
+  <path d="M 19,36 C 13,38 8,44 4,54" stroke="#6DBF4A" stroke-width="4.5" stroke-linecap="round" fill="none"/>
+  <!-- Body -->
+  <ellipse cx="33" cy="33" rx="15" ry="9" fill="#6DBF4A"/>
+  <!-- Head -->
+  <ellipse cx="47" cy="30" rx="9" ry="7" fill="#6DBF4A"/>
+  <!-- Snout -->
+  <polygon points="53,27 62,30 53,33" fill="#6DBF4A"/>
+  <!-- Rear-upper leg -->
+  <line x1="25" y1="26" x2="19" y2="17" stroke="#6DBF4A" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Rear-lower leg -->
+  <line x1="25" y1="40" x2="19" y2="50" stroke="#6DBF4A" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Front-upper leg -->
+  <line x1="39" y1="25" x2="45" y2="16" stroke="#6DBF4A" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Front-lower leg -->
+  <line x1="39" y1="40" x2="45" y2="50" stroke="#6DBF4A" stroke-width="3.5" stroke-linecap="round"/>
+  <!-- Eye -->
+  <circle cx="51" cy="28" r="2.5" fill="white"/>
+  <circle cx="51.5" cy="28.5" r="1.2" fill="#1a1a1a"/>
+</svg>

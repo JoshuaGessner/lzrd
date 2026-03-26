@@ -1,0 +1,15 @@
+# User config — contains the access token, never commit
+config.ini
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.env
+venv/
+.venv/
+*.egg-info/
+dist/
+build/
+.pytest_cache/

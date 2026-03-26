@@ -1,0 +1,10 @@
+[server]
+# Port the built-in web server listens on
+port = 7734
+
+# Access token — shown in the tray menu; enter it once in the web UI
+token = changeme
+
+[lzrd]
+# Pixels the mouse must travel from its armed position before an alert fires
+movement_threshold = 10
