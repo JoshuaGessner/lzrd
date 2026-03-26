@@ -66,24 +66,13 @@ In the same Command Prompt window:
 pip install -r requirements.txt
 ```
 
-**Step 4 — Create your config file**
+**Step 4 — Run LZRD**
 
 ```
-copy config.ini.example config.ini
+python lzrd.py
 ```
 
-Open `config.ini` in Notepad and change the `token` line to a passphrase only you know:
-
-```ini
-[server]
-port  = 7734
-token = my-secret-passphrase
-
-[lzrd]
-movement_threshold = 10
-```
-
-Save the file. You're ready to go.
+LZRD will create its config file automatically on first run and generate a secure access token for you.
 
 ---
 
@@ -133,24 +122,13 @@ No Git? Download the ZIP from [github.com/JoshuaGessner/lzrd](https://github.com
 pip3 install -r requirements.txt
 ```
 
-**Step 5 — Create your config file**
+**Step 5 — Run LZRD**
 
 ```bash
-cp config.ini.example config.ini
+python3 lzrd.py
 ```
 
-Open `config.ini` in any text editor and set your token:
-
-```ini
-[server]
-port  = 7734
-token = my-secret-passphrase
-
-[lzrd]
-movement_threshold = 10
-```
-
-Save and close.
+LZRD will create its config file automatically on first run and generate a secure access token for you.
 
 ---
 
@@ -176,8 +154,7 @@ A small lizard icon appears in the system tray. Hover over it to see the address
 
 1. Make sure your phone is on the **same Wi-Fi network** as your PC.
 2. Open the address shown in the tray tooltip in your phone's browser.
-3. You'll be asked for the **access token** — this is the `token` value you set in `config.ini`.  
-   You can also right-click the tray icon and tap **Show Access Token** to remind yourself.
+3. You'll be asked for the **access token** — right-click the tray icon and tap **Show Access Token** to find it.
 4. Your phone remembers the token, so you only need to enter it once.
 
 ---
@@ -236,7 +213,7 @@ Open `config.ini` in any text editor to change these settings. Restart LZRD afte
 | Setting | Default | Description |
 |---------|---------|-------------|
 | `server.port` | `7734` | The port number the app listens on. Change it if something else is already using 7734. |
-| `server.token` | *(you set this)* | The passphrase you enter in the web app. Use something only you know. |
+| `server.token` | *(auto-generated)* | The passphrase you enter in the web app. Generated automatically on first run; use **Show Access Token** in the tray menu to view it. |
 | `lzrd.movement_threshold` | `10` | How many pixels the mouse must move before the alert fires. Lower = more sensitive. |
 
 ---
@@ -260,12 +237,6 @@ sudo ufw allow from 192.168.0.0/16 to any port 7734
 ---
 
 ## Troubleshooting
-
-**"Config file not found" when starting LZRD**  
-You haven't created your config file yet. Run `copy config.ini.example config.ini` (Windows) or `cp config.ini.example config.ini` (Linux) and then edit the `token` line.
-
-**"token must not be left as 'changeme'" error**  
-Open `config.ini` and change `token = changeme` to your own passphrase.
 
 **Phone can't reach the web app**  
 - Check that your phone and PC are on the same Wi-Fi network (not a guest network).  
