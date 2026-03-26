@@ -1,0 +1,19 @@
+[twilio]
+# Twilio Account SID — found at https://console.twilio.com
+account_sid = ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Twilio Auth Token — found at https://console.twilio.com
+auth_token = xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+
+# Your Twilio phone number (E.164 format, e.g. +12025550100)
+from_number = +12025550100
+
+# The mobile phone number to send alerts to (E.164 format, e.g. +12025550199)
+to_number = +12025550199
+
+[lzrd]
+# How many pixels the mouse must move before an alert is sent
+movement_threshold = 10
+
+# The word that, when texted back, locks the computer (case-insensitive)
+lock_keyword = lock
