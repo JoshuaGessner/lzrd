@@ -1,5 +1,13 @@
-const CACHE = 'lzrd-v1';
-const SHELL = ['/', '/style.css', '/app.js', '/manifest.json', '/icon.svg'];
+const CACHE = 'lzrd-v2';
+const SHELL = [
+  '/',
+  '/style.css',
+  '/app.js',
+  '/manifest.json',
+  '/icon.svg',
+  '/icons/icon-192.png',
+  '/icons/icon-512.png',
+];
 
 self.addEventListener('install', e => {
   e.waitUntil(

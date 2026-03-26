@@ -83,41 +83,57 @@ def _make_icon_image(armed: bool) -> Image.Image:
     size = 64
     img = Image.new("RGBA", (size, size), (0, 0, 0, 0))
     draw = ImageDraw.Draw(img)
-    body_color = (0, 210, 60) if armed else (180, 180, 180)
-    draw.ellipse([8, 20, 52, 48], fill=body_color)
-    draw.ellipse([40, 10, 60, 34], fill=body_color)
-    draw.ellipse([50, 14, 57, 21], fill=(255, 255, 255))
-    draw.ellipse([52, 16, 56, 20], fill=(0, 0, 0))
-    draw.polygon([(8, 34), (0, 54), (14, 40)], fill=body_color)
+    body_color = (109, 191, 74) if armed else (100, 100, 100)
+    # Body
+    draw.ellipse([int(18 * 64 / 64), int(24 * 64 / 64), int(48 * 64 / 64), int(42 * 64 / 64)], fill=body_color)
+    # Head
+    draw.ellipse([int(38 * 64 / 64), int(20 * 64 / 64), int(56 * 64 / 64), int(34 * 64 / 64)], fill=body_color)
+    # Snout
+    draw.polygon([(53, 25), (63, 29), (53, 33)], fill=body_color)
+    # Eye
+    draw.ellipse([50, 22, 55, 27], fill=(255, 255, 255))
+    draw.ellipse([51, 23, 54, 26], fill=(0, 0, 0))
+    # Tail
+    draw.line([(18, 34), (10, 40), (4, 52)], fill=body_color, width=4)
     return img
 
 
 def _make_pwa_icon(size: int) -> Image.Image:
-    """Return a PWA-sized icon (dark background) for the web manifest."""
-    img = Image.new("RGBA", (size, size), (13, 17, 23, 255))
+    """Return a PWA-sized icon (graphite background) for the web manifest."""
+    img = Image.new("RGBA", (size, size), (26, 26, 26, 255))
     draw = ImageDraw.Draw(img)
     s = size / 64
-    c = (0, 210, 60)
-    draw.ellipse([int(8 * s), int(20 * s), int(52 * s), int(48 * s)], fill=c)
-    draw.ellipse([int(40 * s), int(10 * s), int(60 * s), int(34 * s)], fill=c)
-    draw.ellipse([int(50 * s), int(14 * s), int(57 * s), int(21 * s)], fill=(255, 255, 255))
-    draw.ellipse([int(52 * s), int(16 * s), int(56 * s), int(20 * s)], fill=(0, 0, 0))
-    draw.polygon(
-        [(int(8 * s), int(34 * s)), (int(0 * s), int(54 * s)), (int(14 * s), int(40 * s))],
-        fill=c,
-    )
+    c = (109, 191, 74)   # lizard green
+
+    def sc(v: float) -> int:
+        return int(v * s)
+
+    # Body
+    draw.ellipse([sc(18), sc(24), sc(48), sc(42)], fill=c)
+    # Head
+    draw.ellipse([sc(38), sc(20), sc(56), sc(34)], fill=c)
+    # Snout
+    draw.polygon([(sc(53), sc(25)), (sc(63), sc(29)), (sc(53), sc(33))], fill=c)
+    # Eye
+    draw.ellipse([sc(50), sc(22), sc(55), sc(27)], fill=(255, 255, 255))
+    draw.ellipse([sc(51), sc(23), sc(54), sc(26)], fill=(26, 26, 26))
+    # Tail
+    draw.line([(sc(18), sc(34)), (sc(10), sc(40)), (sc(4), sc(52))], fill=c, width=max(1, sc(4)))
+    # Legs (rear upper, rear lower, front upper, front lower)
+    draw.line([(sc(25), sc(26)), (sc(19), sc(17))], fill=c, width=max(1, sc(3)))
+    draw.line([(sc(25), sc(40)), (sc(19), sc(50))], fill=c, width=max(1, sc(3)))
+    draw.line([(sc(39), sc(25)), (sc(45), sc(16))], fill=c, width=max(1, sc(3)))
+    draw.line([(sc(39), sc(40)), (sc(45), sc(50))], fill=c, width=max(1, sc(3)))
     return img
 
 
 def _ensure_pwa_icons() -> None:
-    """Generate PWA icons into web/icons/ if they do not exist."""
+    """Generate PWA icons into web/icons/ (always regenerate to pick up design changes)."""
     try:
         icons_dir = WEB_DIR / "icons"
         icons_dir.mkdir(parents=True, exist_ok=True)
         for px in (192, 512):
-            path = icons_dir / f"icon-{px}.png"
-            if not path.exists():
-                _make_pwa_icon(px).save(str(path))
+            _make_pwa_icon(px).save(str(icons_dir / f"icon-{px}.png"))
     except Exception as exc:
         print(f"[LZRD] Warning: could not generate PWA icons: {exc}")
 

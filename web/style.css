@@ -1,16 +1,16 @@
 *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
 
 :root {
-  --bg:        #0d1117;
-  --surface:   #161b22;
-  --surface2:  #21262d;
-  --green:     #00d43c;
-  --red:       #f85149;
+  --bg:        #1a1a1a;
+  --surface:   #252525;
+  --surface2:  #333333;
+  --green:     #6DBF4A;
+  --red:       #e05040;
   --yellow:    #d29922;
   --blue:      #58a6ff;
-  --text:      #e6edf3;
-  --muted:     #8b949e;
-  --border:    #30363d;
+  --text:      #e8e8e8;
+  --muted:     #8c8c8c;
+  --border:    #3d3d3d;
   --radius:    12px;
 }
 
@@ -136,7 +136,7 @@ main {
   transition: transform .1s, opacity .2s;
   margin-bottom: 20px;
   background: var(--green);
-  color: #0d1117;
+  color: var(--bg);
 }
 .btn-arm.armed { background: var(--surface2); color: var(--text); border: 1px solid var(--border); }
 .btn-arm:active { transform: scale(.98); }
@@ -176,8 +176,8 @@ main {
 .ctrl-btn:active { transform: scale(.95); }
 .ctrl-btn .icon  { font-size: 26px; line-height: 1; }
 
-.ctrl-btn.danger  { border-color: rgba(248, 81, 73, .25); }
-.ctrl-btn.danger:hover, .ctrl-btn.danger:focus  { background: rgba(248, 81, 73, .12); border-color: var(--red); }
+.ctrl-btn.danger  { border-color: rgba(224, 80, 64, .25); }
+.ctrl-btn.danger:hover, .ctrl-btn.danger:focus  { background: rgba(224, 80, 64, .12); border-color: var(--red); }
 
 .ctrl-btn.warning { border-color: rgba(210, 153, 34, .25); }
 .ctrl-btn.warning:hover, .ctrl-btn.warning:focus { background: rgba(210, 153, 34, .12); border-color: var(--yellow); }
@@ -185,7 +185,7 @@ main {
 .ctrl-btn.info    { border-color: rgba(88, 166, 255, .25); }
 .ctrl-btn.info:hover, .ctrl-btn.info:focus    { background: rgba(88, 166, 255, .12); border-color: var(--blue); }
 
-.ctrl-btn.active-state { background: rgba(0, 212, 60, .1); border-color: var(--green); }
+.ctrl-btn.active-state { background: rgba(109, 191, 74, .1); border-color: var(--green); }
 
 /* ── Modal overlay ───────────────────────────────────────────────────── */
 .modal-overlay {
@@ -224,7 +224,7 @@ main {
 
 .modal-actions { display: flex; gap: 9px; }
 .modal-actions button { flex: 1; padding: 13px; border: none; border-radius: 8px; font-size: 15px; font-weight: 600; cursor: pointer; }
-.btn-primary { background: var(--green); color: #0d1117; }
+.btn-primary { background: var(--green); color: var(--bg); }
 .btn-cancel  { background: var(--surface2); color: var(--text); border: 1px solid var(--border) !important; }
 
 /* ── Toast ───────────────────────────────────────────────────────────── */
