@@ -80,7 +80,7 @@ function connect() {
   evtSource.onopen = () => setConn('connected');
 
   evtSource.onmessage = e => {
-    try { handleEvent(JSON.parse(e.data)); } catch (_) {}
+    try { handleEvent(JSON.parse(e.data)); } catch (err) { console.warn('[LZRD] SSE parse error:', err); }
   };
 
   evtSource.onerror = () => {

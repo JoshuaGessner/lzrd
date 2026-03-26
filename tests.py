@@ -230,12 +230,15 @@ class TestFlaskAPI(unittest.TestCase):
     def setUp(self):
         self.cfg = _make_config()
         lzrd_module._token = "testtoken"
+        lzrd_module._token_bytes = b"testtoken"
         lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
         lzrd_module._lzrd.on_state_change = MagicMock()
+        lzrd_module._failed_auth.clear()   # reset rate-limit state between tests
         self.client = lzrd_module._flask_app.test_client()
 
     def tearDown(self):
         lzrd_module._lzrd = None
+        lzrd_module._failed_auth.clear()
 
     # Helpers
     def _get(self, url: str, token: str = "testtoken"):
@@ -496,36 +499,186 @@ class TestCheckToken(unittest.TestCase):
 
     def test_empty_global_token_always_denies(self):
         """If _token is not configured (empty), all requests must be denied."""
-        original = lzrd_module._token
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
         try:
             lzrd_module._token = ""
+            lzrd_module._token_bytes = b""
             self.assertFalse(lzrd_module._check_token(self._make_req("")))
         finally:
-            lzrd_module._token = original
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
 
     def test_correct_header_token_accepted(self):
-        original = lzrd_module._token
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
         try:
             lzrd_module._token = "secret"
+            lzrd_module._token_bytes = b"secret"
             self.assertTrue(lzrd_module._check_token(self._make_req(header_token="secret")))
         finally:
-            lzrd_module._token = original
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
 
     def test_correct_query_token_accepted(self):
-        original = lzrd_module._token
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
         try:
             lzrd_module._token = "secret"
+            lzrd_module._token_bytes = b"secret"
             self.assertTrue(lzrd_module._check_token(self._make_req(query_token="secret")))
         finally:
-            lzrd_module._token = original
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
 
     def test_wrong_token_rejected(self):
-        original = lzrd_module._token
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
         try:
             lzrd_module._token = "secret"
+            lzrd_module._token_bytes = b"secret"
             self.assertFalse(lzrd_module._check_token(self._make_req("wrong")))
         finally:
-            lzrd_module._token = original
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
+
+    def test_check_token_uses_constant_time_comparison(self):
+        """_check_token must delegate to hmac.compare_digest (not plain ==)."""
+        import hmac as hmac_module
+        req = self._make_req(header_token="testtoken")
+        original_tok = lzrd_module._token
+        original_bytes = lzrd_module._token_bytes
+        try:
+            lzrd_module._token = "testtoken"
+            lzrd_module._token_bytes = b"testtoken"
+            with patch.object(hmac_module, "compare_digest", return_value=True) as mock_cd:
+                result = lzrd_module._check_token(req)
+            mock_cd.assert_called_once()
+            self.assertTrue(result)
+        finally:
+            lzrd_module._token = original_tok
+            lzrd_module._token_bytes = original_bytes
+
+
+# ---------------------------------------------------------------------------
+# TestSecurity
+# ---------------------------------------------------------------------------
+
+
+class TestSecurity(unittest.TestCase):
+    """Rate limiting, security headers, and input-length validation."""
+
+    def setUp(self):
+        self.cfg = _make_config()
+        lzrd_module._token = "testtoken"
+        lzrd_module._token_bytes = b"testtoken"
+        lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
+        lzrd_module._lzrd.on_state_change = MagicMock()
+        lzrd_module._failed_auth.clear()
+        self.client = lzrd_module._flask_app.test_client()
+
+    def tearDown(self):
+        lzrd_module._lzrd = None
+        lzrd_module._failed_auth.clear()
+
+    # Helpers
+    def _get(self, url: str, token: str = "testtoken"):
+        return self.client.get(url, headers={"X-Token": token})
+
+    def _post(self, url: str, body=None, token: str = "testtoken"):
+        return self.client.post(url, json=body or {}, headers={"X-Token": token})
+
+    # ── Rate limiting ──────────────────────────────────────────────────────
+
+    def test_rate_limit_blocks_after_too_many_failures(self):
+        """After _MAX_FAILED_AUTH failed auth attempts the IP is blocked (429)."""
+        for _ in range(lzrd_module._MAX_FAILED_AUTH):
+            r = self._get("/api/status", token="wrong")
+            self.assertEqual(r.status_code, 401)
+        # The next attempt — regardless of token — must be rate-limited.
+        r = self._get("/api/status", token="wrong")
+        self.assertEqual(r.status_code, 429)
+
+    def test_rate_limit_blocks_correct_token_from_blocked_ip(self):
+        """A blocked IP is refused even when presenting the correct token."""
+        for _ in range(lzrd_module._MAX_FAILED_AUTH):
+            self._get("/api/status", token="wrong")
+        r = self._get("/api/status", token="testtoken")
+        self.assertEqual(r.status_code, 429)
+
+    def test_correct_token_does_not_accumulate_failures(self):
+        """Successful auth never increments the failure counter."""
+        for _ in range(lzrd_module._MAX_FAILED_AUTH + 5):
+            r = self._get("/api/status")
+            self.assertEqual(r.status_code, 200)
+        self.assertEqual(len(lzrd_module._failed_auth.get("127.0.0.1", [])), 0)
+
+    def test_rate_limit_does_not_apply_to_static_files(self):
+        """The rate limiter must not block requests for static assets."""
+        for _ in range(lzrd_module._MAX_FAILED_AUTH):
+            self._get("/api/status", token="wrong")
+        r = self.client.get("/")
+        self.assertNotEqual(r.status_code, 429)
+
+    # ── Security headers ───────────────────────────────────────────────────
+
+    def test_security_headers_on_api_response(self):
+        """Authenticated API JSON responses carry the required security headers."""
+        r = self._get("/api/status")
+        self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
+        self.assertIn("default-src 'self'", r.headers.get("Content-Security-Policy", ""))
+        self.assertEqual(r.headers.get("Referrer-Policy"), "no-referrer")
+        self.assertEqual(r.headers.get("Cache-Control"), "no-store")
+
+    def test_security_headers_on_401_response(self):
+        """Unauthorized API responses also carry security headers."""
+        r = self._get("/api/status", token="wrong")
+        self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
+
+    def test_security_headers_on_static_response(self):
+        """Static file responses also carry the defensive headers."""
+        r = self.client.get("/")
+        self.assertEqual(r.headers.get("X-Content-Type-Options"), "nosniff")
+        self.assertEqual(r.headers.get("X-Frame-Options"), "DENY")
+        self.assertIn("default-src 'self'", r.headers.get("Content-Security-Policy", ""))
+
+    def test_no_cache_control_no_store_on_sse_route(self):
+        """The SSE events endpoint must NOT receive Cache-Control: no-store."""
+        # The SSE generator blocks indefinitely; exercise only the auth path.
+        r = self._get("/api/events", token="wrong")
+        # 401 response — after_request still runs; verify no-store is absent
+        # because the /api/events path is excluded from the no-store rule.
+        self.assertNotEqual(r.headers.get("Cache-Control"), "no-store")
+
+    # ── Input length limits ────────────────────────────────────────────────
+
+    def test_message_text_too_long_returns_400(self):
+        """Messages exceeding _MAX_MESSAGE_LEN are rejected with 400."""
+        long_text = "a" * (lzrd_module._MAX_MESSAGE_LEN + 1)
+        r = self._post("/api/message", {"text": long_text})
+        self.assertEqual(r.status_code, 400)
+
+    def test_message_at_max_length_is_accepted(self):
+        """A message exactly at the character limit must be accepted."""
+        exact_text = "a" * lzrd_module._MAX_MESSAGE_LEN
+        with patch.object(lzrd_module, "display_message"):
+            r = self._post("/api/message", {"text": exact_text})
+        self.assertEqual(r.status_code, 200)
+
+    def test_launch_path_too_long_returns_400(self):
+        """Paths exceeding _MAX_PATH_LEN are rejected with 400."""
+        long_path = "a" * (lzrd_module._MAX_PATH_LEN + 1)
+        r = self._post("/api/launch", {"path": long_path})
+        self.assertEqual(r.status_code, 400)
+
+    def test_launch_path_at_max_length_is_accepted(self):
+        """A path exactly at the character limit must be accepted."""
+        exact_path = "a" * lzrd_module._MAX_PATH_LEN
+        with patch("subprocess.Popen"):
+            r = self._post("/api/launch", {"path": exact_path})
+        self.assertEqual(r.status_code, 200)
 
 
 if __name__ == "__main__":

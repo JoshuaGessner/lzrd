@@ -26,6 +26,7 @@ Usage:
 
 import configparser
 import ctypes
+import hmac
 import json
 import logging
 import platform
@@ -35,6 +36,7 @@ import socket
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -305,22 +307,91 @@ def _broadcast(event: dict) -> None:
 # ---------------------------------------------------------------------------
 
 _flask_app = Flask(__name__, static_folder=None)
+_flask_app.config["MAX_CONTENT_LENGTH"] = 16 * 1024  # 16 KB — Flask returns 413 for larger bodies
 
 # Set by main() before the server starts
 _lzrd: "LZRD | None" = None
 _token: str = ""
+_token_bytes: bytes = b""   # pre-encoded form of _token; set alongside _token in main()
+
+# ---------------------------------------------------------------------------
+# Security helpers
+# ---------------------------------------------------------------------------
+
+# Maximum allowed length for user-supplied string fields.
+_MAX_MESSAGE_LEN = 500   # characters
+_MAX_PATH_LEN = 260      # characters (matches Windows MAX_PATH)
+
+# The insecure default from config.ini.example — refused at startup.
+_INSECURE_DEFAULT_TOKEN = "changeme"
+
+# Brute-force protection: track failed auth attempts per remote IP.
+_MAX_FAILED_AUTH = 10      # max failures within the rolling window
+_AUTH_WINDOW_SECS = 60.0   # window length in seconds
+
+_rate_limit_lock = threading.Lock()
+_failed_auth: dict[str, list[float]] = {}  # ip -> [monotonic timestamps of failures]
+
+
+def _record_auth_failure(ip: str) -> None:
+    """Append the current timestamp to the failure log for *ip*."""
+    with _rate_limit_lock:
+        _failed_auth.setdefault(ip, []).append(time.monotonic())
 
 
 def _check_token(req: "request") -> bool:
-    # Deny all requests if no token is configured (fail secure).
-    if not _token:
+    """Return True only if *req* carries a valid auth token.
+
+    Uses a constant-time comparison (``hmac.compare_digest``) to prevent
+    timing-based token enumeration.  Failed attempts are recorded so the
+    rate limiter can block the source IP when abuse is detected.
+
+    ``_token_bytes`` is the pre-encoded form of the configured token so
+    UTF-8 encoding only happens once at startup rather than on every request.
+    """
+    if not _token_bytes:
         return False
     tok = req.headers.get("X-Token", "") or req.args.get("token", "")
-    return tok == _token
+    if not tok:
+        _record_auth_failure(req.remote_addr or "")
+        return False
+    result = hmac.compare_digest(tok.encode("utf-8"), _token_bytes)
+    if not result:
+        _record_auth_failure(req.remote_addr or "")
+    return result
 
 
 def _unauthorized() -> tuple:
     return jsonify({"error": "unauthorized"}), 401
+
+
+@_flask_app.before_request
+def _enforce_rate_limit():
+    """Return 429 when an IP has exceeded the failed-auth threshold."""
+    if not request.path.startswith("/api/"):
+        return None
+    ip = request.remote_addr or ""
+    with _rate_limit_lock:
+        now = time.monotonic()
+        history = _failed_auth.get(ip, [])
+        history = [t for t in history if now - t < _AUTH_WINDOW_SECS]
+        _failed_auth[ip] = history
+        if len(history) >= _MAX_FAILED_AUTH:
+            return jsonify({"error": "too many requests"}), 429
+
+
+@_flask_app.after_request
+def _add_security_headers(response):
+    """Attach standard defensive HTTP headers to every response."""
+    response.headers["X-Content-Type-Options"] = "nosniff"
+    response.headers["X-Frame-Options"] = "DENY"
+    response.headers["Content-Security-Policy"] = "default-src 'self'"
+    response.headers["Referrer-Policy"] = "no-referrer"
+    # Prevent caching of API JSON responses.
+    # The SSE endpoint manages its own Cache-Control header.
+    if request.path.startswith("/api/") and request.path != "/api/events":
+        response.headers["Cache-Control"] = "no-store"
+    return response
 
 
 @_flask_app.route("/")
@@ -406,6 +477,8 @@ def api_message():
     text = str(data.get("text", "")).strip()
     if not text:
         return jsonify({"error": "text is required"}), 400
+    if len(text) > _MAX_MESSAGE_LEN:
+        return jsonify({"error": "text too long"}), 400
     display_message(text)
     return jsonify({"ok": True})
 
@@ -418,6 +491,8 @@ def api_launch():
     path = str(data.get("path", "")).strip()
     if not path:
         return jsonify({"error": "path is required"}), 400
+    if len(path) > _MAX_PATH_LEN:
+        return jsonify({"error": "path too long"}), 400
     launch_app(path)
     return jsonify({"ok": True})
 
@@ -598,10 +673,18 @@ def _run_flask(port: int) -> None:
 
 
 def main() -> None:
-    global _lzrd, _token
+    global _lzrd, _token, _token_bytes
 
     config = load_config()
-    _token = config.get("server", "token", fallback="changeme")
+    _token = config.get("server", "token", fallback=_INSECURE_DEFAULT_TOKEN)
+    if _token == _INSECURE_DEFAULT_TOKEN:
+        print(
+            "[LZRD] FATAL: The access token is still set to the insecure default "
+            f"'{_INSECURE_DEFAULT_TOKEN}'.\n"
+            "Please update the [server] token in config.ini before running LZRD."
+        )
+        sys.exit(1)
+    _token_bytes = _token.encode("utf-8")
     port = config.getint("server", "port", fallback=7734)
     local_ip = get_local_ip()
     server_url = f"http://{local_ip}:{port}"
