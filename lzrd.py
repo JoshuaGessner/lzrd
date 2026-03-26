@@ -17,11 +17,10 @@ lets you:
   • Launch a custom application
 
 Usage:
-  1. Copy config.ini.example to config.ini and set your access token.
-  2. Run:  python lzrd.py
-  3. Open the URL shown in the tray tooltip on your phone.
-  4. Enter the access token from config.ini once — it is stored locally.
-  5. Right-click the system-tray icon and choose "Arm", or use the web UI.
+  1. Run:  python lzrd.py
+  2. Open the URL shown in the tray tooltip on your phone.
+  3. Enter the access token shown via "Show Access Token" in the tray menu once — it is stored locally.
+  4. Right-click the system-tray icon and choose "Arm", or use the web UI.
 """
 
 import configparser
@@ -31,6 +30,7 @@ import json
 import logging
 import platform
 import queue
+import secrets
 import shlex
 import socket
 import subprocess
@@ -61,14 +61,16 @@ PLATFORM = platform.system()
 
 
 def load_config() -> configparser.ConfigParser:
-    """Load and return the INI config.  Exits with a helpful message if missing."""
+    """Load and return the INI config, creating it with a random token on first run."""
     config = configparser.ConfigParser()
     if not CONFIG_FILE.exists():
-        print(
-            f"[LZRD] Config file not found: {CONFIG_FILE}\n"
-            "Copy config.ini.example to config.ini and fill in your settings."
-        )
-        sys.exit(1)
+        token = secrets.token_urlsafe(24)
+        config["server"] = {"port": "7734", "token": token}
+        config["lzrd"] = {"movement_threshold": "10"}
+        with CONFIG_FILE.open("w", encoding="utf-8") as fh:
+            config.write(fh)
+        print(f"[LZRD] Created {CONFIG_FILE} with a new random access token.")
+        return config
     config.read(CONFIG_FILE, encoding="utf-8")
     return config
 

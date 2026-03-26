@@ -6,9 +6,11 @@ These tests mock all platform-specific dependencies so they run on any OS.
 import configparser
 import queue
 import sys
+import tempfile
 import threading
 import types
 import unittest
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 
@@ -86,6 +88,59 @@ def _make_config(threshold: str = "10") -> configparser.ConfigParser:
     cfg["server"] = {"port": "7734", "token": "testtoken"}
     cfg["lzrd"] = {"movement_threshold": threshold}
     return cfg
+
+
+# ---------------------------------------------------------------------------
+# TestLoadConfig
+# ---------------------------------------------------------------------------
+
+class TestLoadConfig(unittest.TestCase):
+    """Tests for load_config() auto-creation behaviour."""
+
+    def test_creates_config_when_missing(self):
+        """load_config() should create config.ini if it does not exist."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                cfg = lzrd_module.load_config()
+            self.assertTrue(config_path.exists())
+            self.assertIn("server", cfg)
+            self.assertIn("lzrd", cfg)
+
+    def test_auto_generated_token_is_non_empty(self):
+        """The auto-generated token must be a non-empty string."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                cfg = lzrd_module.load_config()
+            token = cfg.get("server", "token")
+            self.assertTrue(token)
+
+    def test_auto_generated_token_is_not_insecure_default(self):
+        """The auto-generated token must never be the insecure default."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                cfg = lzrd_module.load_config()
+            token = cfg.get("server", "token")
+            self.assertNotEqual(token, lzrd_module._INSECURE_DEFAULT_TOKEN)
+
+    def test_existing_config_is_loaded_unchanged(self):
+        """If config.ini already exists, load_config() must read it without overwriting."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            # Write a pre-existing config
+            existing = configparser.ConfigParser()
+            existing["server"] = {"port": "9999", "token": "mytoken"}
+            existing["lzrd"] = {"movement_threshold": "5"}
+            with config_path.open("w", encoding="utf-8") as fh:
+                existing.write(fh)
+
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                cfg = lzrd_module.load_config()
+
+            self.assertEqual(cfg.get("server", "token"), "mytoken")
+            self.assertEqual(cfg.getint("server", "port"), 9999)
 
 
 # ---------------------------------------------------------------------------
