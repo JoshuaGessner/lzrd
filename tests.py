@@ -342,6 +342,7 @@ class TestFlaskAPI(unittest.TestCase):
         mock_popen.assert_called_once()
         _, kwargs = mock_popen.call_args
         self.assertFalse(kwargs.get("shell", False), "shell=True would allow injection")
+
     def test_launch_missing_path_returns_400(self):
         r = self._post("/api/launch", {})
         self.assertEqual(r.status_code, 400)
@@ -375,6 +376,132 @@ class TestIconRendering(unittest.TestCase):
         img = lzrd_module._make_pwa_icon(512)
         self.assertIsInstance(img, Image.Image)
         self.assertEqual(img.size, (512, 512))
+
+
+# ---------------------------------------------------------------------------
+# TestCrossPlatformOperations
+# ---------------------------------------------------------------------------
+
+class TestCrossPlatformOperations(unittest.TestCase):
+    """Tests for cross-platform system operations (Linux / non-Windows paths)."""
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_lock_workstation_tries_loginctl_first(self):
+        """On Linux, lock_workstation should try loginctl before other lockers."""
+        with patch("subprocess.Popen") as mock_popen:
+            lzrd_module.lock_workstation()
+        mock_popen.assert_called()
+        first_cmd = mock_popen.call_args_list[0][0][0]
+        self.assertEqual(first_cmd[0], "loginctl")
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_lock_workstation_falls_back_on_missing_command(self):
+        """Falls through to the next locker when the first is not installed."""
+        call_count = [0]
+
+        def _side_effect(cmd, *a, **kw):
+            call_count[0] += 1
+            if cmd[0] == "loginctl":
+                raise FileNotFoundError
+            return MagicMock()
+
+        with patch("subprocess.Popen", side_effect=_side_effect):
+            lzrd_module.lock_workstation()
+        self.assertGreaterEqual(call_count[0], 2)
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_shutdown_non_windows_calls_popen(self):
+        with patch("subprocess.Popen") as mock_popen:
+            lzrd_module.shutdown_computer()
+        mock_popen.assert_called()
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_restart_non_windows_calls_popen(self):
+        with patch("subprocess.Popen") as mock_popen:
+            lzrd_module.restart_computer()
+        mock_popen.assert_called()
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_display_message_non_windows_calls_display_tool(self):
+        """display_message on Linux should launch a display tool in a thread."""
+        triggered = threading.Event()
+
+        def _fake_popen(*args, **kwargs):
+            triggered.set()
+            return MagicMock()
+
+        with patch("subprocess.Popen", side_effect=_fake_popen):
+            lzrd_module.display_message("hello from test")
+        self.assertTrue(triggered.wait(timeout=2.0))
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_launch_app_uses_posix_splitting_on_linux(self):
+        """On Linux, shlex should be called with posix=True."""
+        with patch("subprocess.Popen") as mock_popen:
+            lzrd_module.launch_app("echo hello world")
+        mock_popen.assert_called_once()
+        called_args = mock_popen.call_args[0][0]
+        # posix=True splits correctly into three tokens
+        self.assertEqual(called_args, ["echo", "hello", "world"])
+
+    @unittest.skipIf(sys.platform == "win32", "Linux-specific path")
+    def test_get_cursor_pos_non_windows(self):
+        """_get_cursor_pos on Linux should return an (int, int) tuple via pynput."""
+        fake_controller = MagicMock()
+        fake_controller.position = (123.7, 456.2)
+        # The test pynput stub only defines Listener; use create=True to add Controller.
+        with patch.object(
+            lzrd_module.pynput_mouse, "Controller", return_value=fake_controller, create=True
+        ):
+            pos = lzrd_module._get_cursor_pos()
+        self.assertEqual(pos, (123, 456))
+
+
+# ---------------------------------------------------------------------------
+# TestCheckToken
+# ---------------------------------------------------------------------------
+
+class TestCheckToken(unittest.TestCase):
+    """Unit tests for the _check_token helper."""
+
+    def _make_req(self, header_token: str = "", query_token: str = "") -> MagicMock:
+        req = MagicMock()
+        req.headers.get.return_value = header_token
+        req.args.get.return_value = query_token
+        return req
+
+    def test_empty_global_token_always_denies(self):
+        """If _token is not configured (empty), all requests must be denied."""
+        original = lzrd_module._token
+        try:
+            lzrd_module._token = ""
+            self.assertFalse(lzrd_module._check_token(self._make_req("")))
+        finally:
+            lzrd_module._token = original
+
+    def test_correct_header_token_accepted(self):
+        original = lzrd_module._token
+        try:
+            lzrd_module._token = "secret"
+            self.assertTrue(lzrd_module._check_token(self._make_req(header_token="secret")))
+        finally:
+            lzrd_module._token = original
+
+    def test_correct_query_token_accepted(self):
+        original = lzrd_module._token
+        try:
+            lzrd_module._token = "secret"
+            self.assertTrue(lzrd_module._check_token(self._make_req(query_token="secret")))
+        finally:
+            lzrd_module._token = original
+
+    def test_wrong_token_rejected(self):
+        original = lzrd_module._token
+        try:
+            lzrd_module._token = "secret"
+            self.assertFalse(lzrd_module._check_token(self._make_req("wrong")))
+        finally:
+            lzrd_module._token = original
 
 
 if __name__ == "__main__":

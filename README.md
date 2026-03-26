@@ -1,6 +1,7 @@
 # LZRD
 
-A minimalist Windows tripwire and remote-control app for when you're away from your PC.
+A minimalist tripwire and remote-control app for when you're away from your PC.
+Runs on **Windows 10/11** and **Linux** (X11 / systemd desktops).
 
 When **armed**, LZRD watches for mouse movement. The moment the mouse moves beyond a configurable
 threshold it sends a real-time alert to any phone browser connected via the built-in
@@ -14,10 +15,10 @@ threshold it sends a real-time alert to any phone browser connected via the buil
 
 | Control | Description |
 |---------|-------------|
-| 🔒 **Lock Screen** | Lock the Windows workstation immediately |
+| 🔒 **Lock Screen** | Lock the workstation (Win32 `LockWorkStation` / `loginctl lock-session` on Linux) |
 | 🖱️ **Lock Mouse** | Confine the cursor to its current position (toggle) |
-| ⏻ **Shutdown** | Shut down the PC (5-second delay) |
-| 🔄 **Restart** | Restart the PC (5-second delay) |
+| ⏻ **Shutdown** | Shut down the PC |
+| 🔄 **Restart** | Restart the PC |
 | 💬 **Message** | Show a pop-up message box on the PC screen |
 | 🚀 **Launch App** | Run any application or command on the PC |
 
@@ -29,9 +30,23 @@ on the phone.
 
 ## Requirements
 
-- Windows 10 / 11
-- Python 3.10+
+- **Python 3.10+**
 - Your phone and PC on the **same Wi-Fi network** (no internet required)
+
+### Windows
+- Windows 10 / 11
+
+### Linux
+- A systemd desktop (Ubuntu, Fedora, Debian, Arch, etc.)
+- A desktop notification area for the system tray (`pystray` uses
+  [libappindicator3](https://packages.ubuntu.com/focal/gir1.2-appindicator3-0.1)
+  on GNOME; install it with `sudo apt install gir1.2-appindicator3-0.1` or the
+  equivalent for your distro)
+- For **Lock Screen**: at least one of `loginctl`, `xdg-screensaver`,
+  `gnome-screensaver-command`, `xscreensaver-command`, `cinnamon-screensaver-command`,
+  or `dm-tool` must be available (any standard Linux desktop has one)
+- For **Display Message**: `zenity`, `kdialog`, `notify-send`, or `xmessage`
+  (`sudo apt install zenity` covers GNOME/X11)
 
 ---
 
@@ -45,8 +60,14 @@ cd lzrd
 # 2. Install Python dependencies
 pip install -r requirements.txt
 
-# 3. Create your config file
-copy config.ini.example config.ini
+# 3. (Linux only) Install the AppIndicator GObject introspection data
+#    so pystray can render the system tray icon:
+sudo apt install gir1.2-appindicator3-0.1   # Debian / Ubuntu
+# sudo dnf install libappindicator-gtk3      # Fedora
+
+# 4. Create your config file
+cp config.ini.example config.ini            # Linux / macOS
+copy config.ini.example config.ini          # Windows
 ```
 
 Edit `config.ini` and (at minimum) set a strong access token:
@@ -68,8 +89,12 @@ movement_threshold = 10
 python lzrd.py
 ```
 
-A small lizard icon appears in the Windows system tray. Hover over it to see the server URL
+A small lizard icon appears in the system tray. Hover over it to see the server URL
 (e.g. `http://192.168.1.100:7734`).
+
+> **Linux — no tray available?**  If `pystray` cannot attach to a notification area
+> (e.g. headless, or GNOME without AppIndicator), LZRD prints the server URL to the
+> terminal and keeps running.  The full web UI is still accessible from your phone.
 
 ### Connecting your phone
 
@@ -119,5 +144,13 @@ A small lizard icon appears in the Windows system tray. Hover over it to see the
 `config.ini` contains your access token — **never commit it to version control**.
 It is listed in `.gitignore` by default.
 The web server is only accessible to devices on the same local network.
-For additional security, configure your Windows Firewall to restrict access to port 7734.
+For additional security, restrict access to port 7734 at the firewall:
+
+```bash
+# Windows (PowerShell — admin)
+New-NetFirewallRule -DisplayName "LZRD" -Direction Inbound -LocalPort 7734 -Protocol TCP -Action Allow
+
+# Linux (ufw)
+sudo ufw allow from 192.168.0.0/16 to any port 7734
+```
 

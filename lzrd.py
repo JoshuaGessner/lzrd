@@ -1,5 +1,7 @@
 """
-LZRD — Mouse-movement tripwire for Windows with PWA remote control.
+LZRD — Mouse-movement tripwire with PWA remote control.
+
+Supports **Windows 10/11** fully and **Linux** (X11/systemd desktops).
 
 When armed, LZRD watches for mouse movement.  The moment the mouse moves
 beyond the configured threshold it broadcasts a real-time alert to all
@@ -26,6 +28,7 @@ import configparser
 import ctypes
 import json
 import logging
+import platform
 import queue
 import shlex
 import socket
@@ -41,11 +44,14 @@ from PIL import Image, ImageDraw
 from pynput import mouse as pynput_mouse
 
 # ---------------------------------------------------------------------------
-# Paths
+# Paths / Platform
 # ---------------------------------------------------------------------------
 
 CONFIG_FILE = Path(__file__).parent / "config.ini"
 WEB_DIR = Path(__file__).parent / "web"
+
+#: Current OS name: "Windows", "Linux", or "Darwin"
+PLATFORM = platform.system()
 
 # ---------------------------------------------------------------------------
 # Configuration
@@ -115,55 +121,114 @@ def _ensure_pwa_icons() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Windows helpers
+# Cross-platform system helpers
 # ---------------------------------------------------------------------------
+
+# Linux-only: event used to stop the mouse-lock background thread.
+_linux_mouse_lock_stop: threading.Event = threading.Event()
 
 
 def _get_cursor_pos() -> tuple[int, int]:
-    """Return the current (x, y) cursor position using the Win32 API."""
+    """Return the current (x, y) cursor position."""
+    if PLATFORM == "Windows":
+        class _POINT(ctypes.Structure):
+            _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
 
-    class _POINT(ctypes.Structure):
-        _fields_ = [("x", ctypes.c_long), ("y", ctypes.c_long)]
-
-    pt = _POINT()
-    ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
-    return pt.x, pt.y
+        pt = _POINT()
+        ctypes.windll.user32.GetCursorPos(ctypes.byref(pt))
+        return pt.x, pt.y
+    else:
+        # pynput.mouse.Controller is cross-platform (X11, Wayland, macOS)
+        pos = pynput_mouse.Controller().position
+        return (int(pos[0]), int(pos[1]))
 
 
 def lock_workstation() -> None:
-    """Lock the Windows workstation."""
-    ctypes.windll.user32.LockWorkStation()
+    """Lock the screen / workstation."""
+    if PLATFORM == "Windows":
+        ctypes.windll.user32.LockWorkStation()
+    else:
+        # Try common Linux screen-lockers in preference order.
+        for cmd in [
+            ["loginctl", "lock-session"],
+            ["xdg-screensaver", "lock"],
+            ["gnome-screensaver-command", "--lock"],
+            ["xscreensaver-command", "-lock"],
+            ["cinnamon-screensaver-command", "--lock"],
+            ["dm-tool", "lock"],
+        ]:
+            try:
+                subprocess.Popen(cmd)
+                return
+            except FileNotFoundError:
+                continue
+        print("[LZRD] Warning: no supported screen-locker found on this system.")
 
 
 def lock_mouse_cursor() -> None:
-    """Confine the mouse cursor to a 1×1 pixel area at its current position."""
+    """Confine the mouse cursor to its current position."""
+    if PLATFORM == "Windows":
+        class _RECT(ctypes.Structure):
+            _fields_ = [
+                ("left", ctypes.c_long),
+                ("top", ctypes.c_long),
+                ("right", ctypes.c_long),
+                ("bottom", ctypes.c_long),
+            ]
 
-    class _RECT(ctypes.Structure):
-        _fields_ = [
-            ("left", ctypes.c_long),
-            ("top", ctypes.c_long),
-            ("right", ctypes.c_long),
-            ("bottom", ctypes.c_long),
-        ]
+        x, y = _get_cursor_pos()
+        rect = _RECT(x, y, x + 1, y + 1)
+        ctypes.windll.user32.ClipCursor(ctypes.byref(rect))
+    else:
+        # Use a daemon thread that continuously resets the cursor position.
+        _linux_mouse_lock_stop.clear()
+        lx, ly = _get_cursor_pos()
 
-    x, y = _get_cursor_pos()
-    rect = _RECT(x, y, x + 1, y + 1)
-    ctypes.windll.user32.ClipCursor(ctypes.byref(rect))
+        def _keep_locked() -> None:
+            ctrl = pynput_mouse.Controller()
+            while not _linux_mouse_lock_stop.is_set():
+                cx, cy = int(ctrl.position[0]), int(ctrl.position[1])
+                if abs(cx - lx) > 1 or abs(cy - ly) > 1:
+                    ctrl.position = (lx, ly)
+                _linux_mouse_lock_stop.wait(0.05)
+
+        threading.Thread(
+            target=_keep_locked, daemon=True, name="lzrd-mouselock"
+        ).start()
 
 
 def unlock_mouse_cursor() -> None:
     """Release the mouse cursor confinement."""
-    ctypes.windll.user32.ClipCursor(None)
+    if PLATFORM == "Windows":
+        ctypes.windll.user32.ClipCursor(None)
+    else:
+        _linux_mouse_lock_stop.set()
 
 
 def shutdown_computer() -> None:
-    """Initiate a Windows shutdown with a 5-second delay."""
-    subprocess.Popen(["shutdown", "/s", "/t", "5"])
+    """Initiate a system shutdown."""
+    if PLATFORM == "Windows":
+        subprocess.Popen(["shutdown", "/s", "/t", "5"])
+    else:
+        for cmd in [["systemctl", "poweroff"], ["shutdown", "-h", "now"]]:
+            try:
+                subprocess.Popen(cmd)
+                return
+            except FileNotFoundError:
+                continue
 
 
 def restart_computer() -> None:
-    """Initiate a Windows restart with a 5-second delay."""
-    subprocess.Popen(["shutdown", "/r", "/t", "5"])
+    """Initiate a system restart."""
+    if PLATFORM == "Windows":
+        subprocess.Popen(["shutdown", "/r", "/t", "5"])
+    else:
+        for cmd in [["systemctl", "reboot"], ["shutdown", "-r", "now"]]:
+            try:
+                subprocess.Popen(cmd)
+                return
+            except FileNotFoundError:
+                continue
 
 
 # Windows MessageBox flags
@@ -172,12 +237,26 @@ _MB_SETFOREGROUND = 0x1000
 
 
 def display_message(text: str) -> None:
-    """Show a Windows message box (non-blocking, runs in its own thread)."""
-
-    def _show() -> None:
-        ctypes.windll.user32.MessageBoxW(
-            None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
-        )
+    """Display a notification message to the user (non-blocking)."""
+    if PLATFORM == "Windows":
+        def _show() -> None:
+            ctypes.windll.user32.MessageBoxW(
+                None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
+            )
+    else:
+        def _show() -> None:
+            for cmd in [
+                ["zenity", "--info", f"--title=LZRD Message", f"--text={text}", "--no-wrap"],
+                ["kdialog", "--title", "LZRD Message", "--msgbox", text],
+                ["notify-send", "LZRD Message", text],
+                ["xmessage", "-center", text],
+            ]:
+                try:
+                    subprocess.Popen(cmd)
+                    return
+                except FileNotFoundError:
+                    continue
+            print(f"[LZRD] Message: {text}")
 
     threading.Thread(target=_show, daemon=True, name="lzrd-msgbox").start()
 
@@ -190,7 +269,7 @@ def launch_app(path: str) -> None:
     ``shell=False`` is used to prevent shell injection attacks.
     """
     try:
-        args = shlex.split(path, posix=False)
+        args = shlex.split(path, posix=(PLATFORM != "Windows"))
     except ValueError:
         args = [path]
     subprocess.Popen(args, shell=False)
@@ -233,6 +312,9 @@ _token: str = ""
 
 
 def _check_token(req: "request") -> bool:
+    # Deny all requests if no token is configured (fail secure).
+    if not _token:
+        return False
     tok = req.headers.get("X-Token", "") or req.args.get("token", "")
     return tok == _token
 
@@ -467,8 +549,12 @@ class LZRD:
     # ------------------------------------------------------------------
 
     def _start_mouse_listener(self) -> None:
-        self._mouse_listener = pynput_mouse.Listener(on_move=self._on_move)
-        self._mouse_listener.start()
+        try:
+            self._mouse_listener = pynput_mouse.Listener(on_move=self._on_move)
+            self._mouse_listener.start()
+        except Exception as exc:
+            print(f"[LZRD] Warning: could not start mouse listener: {exc}")
+            self._mouse_listener = None
 
     def _stop_mouse_listener(self) -> None:
         if self._mouse_listener is not None:
@@ -544,13 +630,9 @@ def main() -> None:
             pystray.MenuItem("Exit", lambda icon, item: icon.stop()),
         )
 
-    def _refresh_tray() -> None:
-        icon.icon = _make_icon_image(_lzrd.armed)
-        icon.title = f"LZRD — {'Armed 🟢' if _lzrd.armed else 'Disarmed 🔴'} | {server_url}"
-        icon.menu = _build_menu()
-
-    _lzrd.on_state_change = _refresh_tray
-
+    # Create the icon *before* setting on_state_change so _refresh_tray
+    # can safely reference it without triggering an UnboundLocalError if
+    # the Flask thread receives a request during startup.
     icon = pystray.Icon(
         name="LZRD",
         icon=_make_icon_image(armed=False),
@@ -558,7 +640,24 @@ def main() -> None:
         menu=_build_menu(),
     )
 
-    icon.run()
+    def _refresh_tray() -> None:
+        icon.icon = _make_icon_image(_lzrd.armed)
+        icon.title = f"LZRD — {'Armed 🟢' if _lzrd.armed else 'Disarmed 🔴'} | {server_url}"
+        icon.menu = _build_menu()
+
+    _lzrd.on_state_change = _refresh_tray
+
+    try:
+        icon.run()
+    except Exception as exc:
+        # System tray not available (headless Linux, no notification area, etc.)
+        print(f"[LZRD] System tray unavailable: {exc}")
+        print(f"[LZRD] Web interface running at {server_url}")
+        print("[LZRD] Press Ctrl+C to stop.")
+        try:
+            threading.Event().wait()
+        except KeyboardInterrupt:
+            pass
 
 
 if __name__ == "__main__":
