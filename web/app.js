@@ -250,52 +250,7 @@ async function registerPushSubscription(subscription) {
   }
 }
 
-function updatePushStatusUI() {
-  const statusEl = document.getElementById('push-status');
-  const messageEl = document.getElementById('push-message');
-  const btnEl = document.getElementById('btn-enable-push');
 
-  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
-    messageEl.textContent = 'Push notifications not supported on this device.';
-    btnEl.classList.add('hidden');
-    return;
-  }
-
-  if (!window.isSecureContext) {
-    messageEl.textContent = 'Requires secure connection (HTTPS) for background alerts.';
-    btnEl.classList.add('hidden');
-    return;
-  }
-
-  if (Notification.permission === 'denied') {
-    messageEl.textContent = 'Background notifications blocked. Check your browser permissions.';
-    btnEl.classList.add('hidden');
-    return;
-  }
-
-  if (pushEnabled) {
-    messageEl.textContent = '✓ Background alerts enabled. You will receive notifications when the app is closed.';
-    btnEl.classList.add('hidden');
-    return;
-  }
-
-  messageEl.textContent = 'Enable background alerts for movement notifications when the app is closed.';
-  btnEl.classList.remove('hidden');
-  btnEl.onclick = async () => {
-    if (Notification.permission !== 'granted') {
-      const perm = await Notification.requestPermission();
-      if (perm !== 'granted') {
-        updatePushStatusUI();
-        return;
-      }
-      await enrollPushNotifications(true);
-      updatePushStatusUI();
-    } else {
-      await enrollPushNotifications(true);
-      updatePushStatusUI();
-    }
-  };
-}
 
 /* ── SSE connection ────────────────────────────────────────────────────── */
 function connect() {
@@ -479,8 +434,7 @@ async function connectAfterAuth() {
   }
   handleEvent({ type: 'state', ...status.data });
   connect();
-  enrollPushNotifications(false).catch(() => {});
-  updatePushStatusUI();
+  enrollPushNotifications(true).catch(() => {});
 }
 
 async function initAuthFlow() {
@@ -510,8 +464,7 @@ async function initAuthFlow() {
   handleEvent({ type: 'state', ...status.data });
   hideAuthModal();
   connect();
-  enrollPushNotifications(false).catch(() => {});
-  updatePushStatusUI();
+  enrollPushNotifications(true).catch(() => {});
 }
 
 /* ── Button press flash ────────────────────────────────────────────────── */
@@ -633,4 +586,3 @@ window.addEventListener('online', () => {
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
 initAuthFlow();
-updatePushStatusUI();
