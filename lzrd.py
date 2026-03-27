@@ -25,6 +25,7 @@ Usage:
 
 import configparser
 import ctypes
+import base64
 import hashlib
 import hmac
 import json
@@ -35,11 +36,11 @@ import secrets
 import shlex
 import socket
 import subprocess
-import sys
 import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from urllib.parse import urlparse
 
 import pystray
 from flask import Flask, Response, jsonify, request, send_from_directory
@@ -322,23 +323,56 @@ _vapid_private_key: str = ""
 _vapid_claim_email: str = ""
 
 
+def _public_key_to_vapid_b64(public_key: ec.EllipticCurvePublicKey) -> str:
+    """Return URL-safe base64 (unpadded) VAPID public key bytes."""
+    numbers = public_key.public_numbers()
+    raw = b"\x04" + numbers.x.to_bytes(32, "big") + numbers.y.to_bytes(32, "big")
+    return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+
+
+def _normalize_vapid_public_key(public_key_value: str, private_pem: str) -> str:
+    """Return URL-safe base64 VAPID public key from base64/PEM/derived private key."""
+    candidate = (public_key_value or "").strip()
+    if candidate.startswith("-----BEGIN"):
+        try:
+            pub_obj = serialization.load_pem_public_key(candidate.encode("utf-8"))
+            if isinstance(pub_obj, ec.EllipticCurvePublicKey):
+                return _public_key_to_vapid_b64(pub_obj)
+        except Exception:
+            return ""
+
+    if candidate:
+        try:
+            padded = candidate + "=" * ((4 - len(candidate) % 4) % 4)
+            raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+            ec.EllipticCurvePublicKey.from_encoded_point(ec.SECP256R1(), raw)
+            return candidate
+        except Exception:
+            return ""
+
+    if private_pem:
+        try:
+            priv_obj = serialization.load_pem_private_key(private_pem.encode("utf-8"), password=None)
+            if isinstance(priv_obj, ec.EllipticCurvePrivateKey):
+                return _public_key_to_vapid_b64(priv_obj.public_key())
+        except Exception:
+            return ""
+
+    return ""
+
+
 def _generate_vapid_keys() -> tuple[str, str]:
-    """Generate a new VAPID key pair and return (public_key, private_key)."""
+    """Generate a new VAPID key pair and return (public_b64, private_pem)."""
     private_key = ec.generate_private_key(ec.SECP256R1())
-    public_key = private_key.public_key()
-    
+    public_b64 = _public_key_to_vapid_b64(private_key.public_key())
+
     private_pem = private_key.private_bytes(
         encoding=serialization.Encoding.PEM,
         format=serialization.PrivateFormat.PKCS8,
         encryption_algorithm=serialization.NoEncryption()
     ).decode('utf-8')
-    
-    public_pem = public_key.public_bytes(
-        encoding=serialization.Encoding.PEM,
-        format=serialization.PublicFormat.SubjectPublicKeyInfo
-    ).decode('utf-8')
-    
-    return public_pem, private_pem
+
+    return public_b64, private_pem
 
 
 def _load_push_subscriptions() -> None:
@@ -425,6 +459,15 @@ _MAX_PATH_LEN = 260      # characters (matches Windows MAX_PATH)
 
 # The insecure default token value — refused at startup.
 _INSECURE_DEFAULT_TOKEN = "changeme"
+_MIN_SERVER_TOKEN_LEN = 24
+_INSECURE_TOKEN_VALUES = {
+    "",
+    "changeme",
+    "testtoken",
+    "default",
+    "password",
+    "token",
+}
 
 # Brute-force protection: track failed auth attempts per remote IP.
 _MAX_FAILED_AUTH = 10      # max failures within the rolling window
@@ -503,6 +546,23 @@ def _write_config() -> None:
     """Persist current config state to config.ini."""
     if _config is None:
         return
+
+    # Preserve the on-disk token if this process has stale in-memory config.
+    # This prevents unrelated writes (e.g. auth updates) from rolling back a
+    # manually rotated token while the app is still running.
+    disk_cfg = configparser.ConfigParser()
+    try:
+        if CONFIG_FILE.exists():
+            disk_cfg.read(CONFIG_FILE, encoding="utf-8")
+            disk_token = _normalize_token(disk_cfg.get("server", "token", fallback=""))
+            if disk_token:
+                if not _config.has_section("server"):
+                    _config.add_section("server")
+                _config.set("server", "token", disk_token)
+    except Exception:
+        # Fall back to writing current in-memory config if disk read fails.
+        pass
+
     with CONFIG_FILE.open("w", encoding="utf-8") as fh:
         _config.write(fh)
 
@@ -525,6 +585,74 @@ def _reset_owner_credentials() -> bool:
 def _normalize_token(tok: str) -> str:
     """Normalize copied tokens by stripping all whitespace characters."""
     return "".join(tok.split())
+
+
+def _is_weak_server_token(token: str) -> bool:
+    """Return True when *token* is too weak for internet-exposed deployments."""
+    normalized = _normalize_token(token)
+    if len(normalized) < _MIN_SERVER_TOKEN_LEN:
+        return True
+    if normalized.lower() in _INSECURE_TOKEN_VALUES:
+        return True
+    return False
+
+
+def _ensure_server_token(config: configparser.ConfigParser) -> str:
+    """Read, validate, and auto-rotate the server token when needed."""
+    if not config.has_section("server"):
+        config.add_section("server")
+
+    current = _normalize_token(config.get("server", "token", fallback=""))
+    if not _is_weak_server_token(current):
+        return current
+
+    rotated = secrets.token_urlsafe(32)
+    config.set("server", "token", rotated)
+    with CONFIG_FILE.open("w", encoding="utf-8") as fh:
+        config.write(fh)
+
+    print(
+        "[LZRD] Warning: weak or missing [server] token detected. "
+        "Generated and saved a new random token. Existing sessions were invalidated."
+    )
+    return rotated
+
+
+def _ensure_vapid_config(config: configparser.ConfigParser) -> tuple[str, str, str]:
+    """Return validated VAPID config and persist generated defaults when needed."""
+    if not config.has_section("server"):
+        config.add_section("server")
+
+    private_key = config.get("server", "vapid_private_key", fallback="").strip()
+    public_key = config.get("server", "vapid_public_key", fallback="").strip()
+    claim_email = config.get("server", "vapid_claim_email", fallback="").strip()
+
+    changed = False
+    if not private_key:
+        public_key, private_key = _generate_vapid_keys()
+        config.set("server", "vapid_public_key", public_key)
+        config.set("server", "vapid_private_key", private_key)
+        changed = True
+
+    normalized_public = _normalize_vapid_public_key(public_key, private_key)
+    if normalized_public and normalized_public != public_key:
+        public_key = normalized_public
+        config.set("server", "vapid_public_key", public_key)
+        changed = True
+
+    if not claim_email:
+        public_url = config.get("server", "public_url", fallback="").strip()
+        host = urlparse(public_url).hostname if public_url else ""
+        claim_email = f"admin@{host or 'localhost'}"
+        config.set("server", "vapid_claim_email", claim_email)
+        changed = True
+
+    if changed:
+        with CONFIG_FILE.open("w", encoding="utf-8") as fh:
+            config.write(fh)
+        print("[LZRD] Web Push config updated in config.ini.")
+
+    return public_key, private_key, claim_email
 
 
 def _check_raw_token(req: "request") -> bool:
@@ -909,6 +1037,9 @@ def _make_sse_stream():
 def api_push_subscribe():
     if not _check_token(request):
         return _unauthorized()
+
+    if not (_vapid_public_key and _vapid_private_key and _vapid_claim_email):
+        return jsonify({"error": "push not configured"}), 503
     
     data = request.get_json(silent=True) or {}
     subscription = data.get("subscription")
@@ -918,9 +1049,16 @@ def api_push_subscribe():
     endpoint = subscription.get("endpoint", "").strip()
     if not endpoint:
         return jsonify({"error": "missing endpoint"}), 400
+
+    keys = subscription.get("keys") or {}
+    if not keys.get("p256dh") or not keys.get("auth"):
+        return jsonify({"error": "invalid subscription keys"}), 400
     
     sub_id = secrets.token_urlsafe(16)
     with _push_subscriptions_lock:
+        for existing_id, existing_sub in list(_push_subscriptions.items()):
+            if existing_sub.get("endpoint") == endpoint:
+                _push_subscriptions.pop(existing_id, None)
         _push_subscriptions[sub_id] = subscription
     _save_push_subscriptions()
     
@@ -954,7 +1092,7 @@ def api_push_status():
     if not _check_token(request):
         return _unauthorized()
     
-    has_vapid = bool(_vapid_public_key and _vapid_private_key)
+    has_vapid = bool(_vapid_public_key and _vapid_private_key and _vapid_claim_email)
     with _push_subscriptions_lock:
         sub_count = len(_push_subscriptions)
     
@@ -1107,22 +1245,12 @@ def main() -> None:
 
     config = load_config()
     _config = config
-    _token = _normalize_token(config.get("server", "token", fallback=_INSECURE_DEFAULT_TOKEN))
-    if _token == _INSECURE_DEFAULT_TOKEN:
-        print(
-            "[LZRD] FATAL: The access token is still set to the insecure default "
-            f"'{_INSECURE_DEFAULT_TOKEN}'.\n"
-            "Please update the [server] token in config.ini before running LZRD."
-        )
-        sys.exit(1)
+    _token = _ensure_server_token(config)
     _token_bytes = _token.encode("utf-8")
     _owner_username = config.get("auth", "owner_username", fallback="").strip()
     _owner_password_hash = config.get("auth", "owner_password_hash", fallback="").strip()
-    
-    # Load VAPID keys for Web Push (optional)
-    _vapid_public_key = config.get("server", "vapid_public_key", fallback="").strip()
-    _vapid_private_key = config.get("server", "vapid_private_key", fallback="").strip()
-    _vapid_claim_email = config.get("server", "vapid_claim_email", fallback="").strip()
+
+    _vapid_public_key, _vapid_private_key, _vapid_claim_email = _ensure_vapid_config(config)
     
     # Load push subscriptions
     _load_push_subscriptions()

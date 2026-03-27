@@ -144,6 +144,72 @@ class TestLoadConfig(unittest.TestCase):
             self.assertEqual(cfg.getint("server", "port"), 9999)
 
 
+class TestTokenHardening(unittest.TestCase):
+    """Tests for automatic server-token hardening."""
+
+    def test_ensure_server_token_rotates_weak_value(self):
+        cfg = configparser.ConfigParser()
+        cfg["server"] = {"port": "7734", "token": "testtoken"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with config_path.open("w", encoding="utf-8") as fh:
+                cfg.write(fh)
+
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                token = lzrd_module._ensure_server_token(cfg)
+
+            self.assertFalse(lzrd_module._is_weak_server_token(token))
+
+            loaded = configparser.ConfigParser()
+            loaded.read(config_path, encoding="utf-8")
+            self.assertEqual(loaded.get("server", "token"), token)
+            self.assertNotEqual(token, "testtoken")
+
+    def test_ensure_server_token_keeps_strong_value(self):
+        strong = "a" * 32
+        cfg = configparser.ConfigParser()
+        cfg["server"] = {"port": "7734", "token": strong}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with config_path.open("w", encoding="utf-8") as fh:
+                cfg.write(fh)
+
+            with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                token = lzrd_module._ensure_server_token(cfg)
+
+            self.assertEqual(token, strong)
+            self.assertFalse(lzrd_module._is_weak_server_token(token))
+
+    def test_write_config_preserves_disk_server_token(self):
+        cfg_disk = configparser.ConfigParser()
+        cfg_disk["server"] = {"port": "7734", "token": "strongtokenvalue1234567890"}
+        cfg_disk["auth"] = {"owner_username": "", "owner_password_hash": ""}
+
+        cfg_mem = configparser.ConfigParser()
+        cfg_mem["server"] = {"port": "7734", "token": "testtoken"}
+        cfg_mem["auth"] = {"owner_username": "alice", "owner_password_hash": "hash"}
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "config.ini"
+            with config_path.open("w", encoding="utf-8") as fh:
+                cfg_disk.write(fh)
+
+            orig_cfg = lzrd_module._config
+            try:
+                with patch.object(lzrd_module, "CONFIG_FILE", config_path):
+                    lzrd_module._config = cfg_mem
+                    lzrd_module._write_config()
+            finally:
+                lzrd_module._config = orig_cfg
+
+            loaded = configparser.ConfigParser()
+            loaded.read(config_path, encoding="utf-8")
+            self.assertEqual(loaded.get("server", "token"), "strongtokenvalue1234567890")
+            self.assertEqual(loaded.get("auth", "owner_username"), "alice")
+
+
 # ---------------------------------------------------------------------------
 # TestProxyConfig
 # ---------------------------------------------------------------------------

@@ -6,6 +6,7 @@ let mouseLocked = false;
 let currentPlatform = null;   // set from first SSE event; null = unknown
 let authMode = 'login';       // 'login' | 'setup'
 let reconnectTimer = null;
+let recoveringVisibility = false;
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
 const authModal     = document.getElementById('auth-modal');
@@ -171,7 +172,7 @@ authSetupToken.addEventListener('keydown', e => { if (e.key === 'Enter') submitA
 let pushEnabled = false;
 let pushSubscription = null;
 
-async function enrollPushNotifications() {
+async function enrollPushNotifications(forceSubscribe = false) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     console.log('[LZRD] Push notifications not supported');
     return;
@@ -196,7 +197,15 @@ async function enrollPushNotifications() {
       return;
     }
 
+    if (Notification.permission !== 'granted' && !forceSubscribe) {
+      return;
+    }
+
     const statusRes = await fetch('/api/push/status', { credentials: 'same-origin' });
+    if (!statusRes.ok) {
+      console.warn('[LZRD] Push status probe failed:', statusRes.status);
+      return;
+    }
     const statusData = await statusRes.json();
     if (!statusData.push_enabled || !statusData.vapid_public_key) {
       console.log('[LZRD] Server does not have Web Push configured');
@@ -272,16 +281,20 @@ function updatePushStatusUI() {
 
   messageEl.textContent = 'Enable background alerts for movement notifications when the app is closed.';
   btnEl.classList.remove('hidden');
-  btnEl.addEventListener('click', async () => {
+  btnEl.onclick = async () => {
     if (Notification.permission !== 'granted') {
-      Notification.requestPermission().then(perm => {
-        if (perm === 'granted') enrollPushNotifications();
-      });
+      const perm = await Notification.requestPermission();
+      if (perm !== 'granted') {
+        updatePushStatusUI();
+        return;
+      }
+      await enrollPushNotifications(true);
+      updatePushStatusUI();
     } else {
-      await enrollPushNotifications();
+      await enrollPushNotifications(true);
       updatePushStatusUI();
     }
-  });
+  };
 }
 
 /* ── SSE connection ────────────────────────────────────────────────────── */
@@ -434,11 +447,8 @@ async function connectAfterAuth() {
     return;
   }
   handleEvent({ type: 'state', ...status.data });
-  if ('Notification' in window && window.isSecureContext && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
-  }
   connect();
-  enrollPushNotifications().catch(() => {});
+  enrollPushNotifications(false).catch(() => {});
   updatePushStatusUI();
 }
 
@@ -468,11 +478,8 @@ async function initAuthFlow() {
   }
   handleEvent({ type: 'state', ...status.data });
   hideAuthModal();
-  if ('Notification' in window && window.isSecureContext && Notification.permission === 'default') {
-    Notification.requestPermission().catch(() => {});
-  }
   connect();
-  enrollPushNotifications().catch(() => {});
+  enrollPushNotifications(false).catch(() => {});
   updatePushStatusUI();
 }
 
@@ -561,25 +568,30 @@ if ('serviceWorker' in navigator) {
 /* ── Visibility restore ────────────────────────────────────────────────── */
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
+  if (recoveringVisibility) return;
+  recoveringVisibility = true;
+  try {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (evtSource) {
+      evtSource.close();
+      evtSource = null;
+    }
 
-  if (reconnectTimer) {
-    clearTimeout(reconnectTimer);
-    reconnectTimer = null;
+    const status = await probeStatus();
+    if (!status.ok && status.status === 401) {
+      showAuthModal('login', 'Session expired. Sign in again.');
+      return;
+    }
+    if (status.ok && status.data) {
+      handleEvent({ type: 'state', ...status.data });
+    }
+    connect();
+  } finally {
+    recoveringVisibility = false;
   }
-  if (evtSource) {
-    evtSource.close();
-    evtSource = null;
-  }
-
-  const status = await probeStatus();
-  if (!status.ok && status.status === 401) {
-    showAuthModal('login', 'Session expired. Sign in again.');
-    return;
-  }
-  if (status.ok && status.data) {
-    handleEvent({ type: 'state', ...status.data });
-  }
-  connect();
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */

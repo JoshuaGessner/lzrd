@@ -1,4 +1,4 @@
-const CACHE = 'lzrd-app-v3';
+const CACHE = 'lzrd-app-v4';
 const SHELL = [
   '/',
   '/style.css',
@@ -78,7 +78,7 @@ self.addEventListener('notificationclick', e => {
     clients.matchAll({ type: 'window' })
       .then(clientList => {
         for (let client of clientList) {
-          if (client.url === '/' && 'focus' in client) {
+          if (client.url.startsWith(self.location.origin) && 'focus' in client) {
             return client.focus();
           }
         }
