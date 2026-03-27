@@ -208,7 +208,12 @@ function setConn(state) {
 
 /* ── Event handler ─────────────────────────────────────────────────────── */
 function handleEvent(data) {
-  if (data.type === 'alert' && navigator.vibrate) navigator.vibrate([200, 100, 200]);
+  if (data.type === 'alert') {
+    if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
+    if (Notification.permission === 'granted') {
+      new Notification('LZRD Alert', { body: 'Movement detected!', icon: '/icons/icon-192.png', tag: 'lzrd-alert' });
+    }
+  }
   if (data.platform     !== undefined) applyPlatform(data.platform);
   if (data.armed        !== undefined) armed       = data.armed;
   if (data.alert        !== undefined) alertActive = data.alert;
@@ -240,6 +245,7 @@ function updateUI() {
     lbl.textContent = 'Unlock Mouse';
   } else {
     btnMouseLock.classList.remove('active-state');
+    btnMouseLock.blur();
     lbl.textContent = 'Lock Mouse';
   }
 }
@@ -300,6 +306,7 @@ async function connectAfterAuth() {
     return;
   }
   handleEvent({ type: 'state', ...status.data });
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   connect();
 }
 
@@ -329,6 +336,7 @@ async function initAuthFlow() {
   }
   handleEvent({ type: 'state', ...status.data });
   hideAuthModal();
+  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
   connect();
 }
 
@@ -413,6 +421,14 @@ if ('serviceWorker' in navigator) {
     setInterval(() => reg.update().catch(() => {}), 60 * 1000);
   }).catch(() => {});
 }
+
+/* ── Visibility restore ────────────────────────────────────────────────── */
+document.addEventListener('visibilitychange', async () => {
+  if (document.visibilityState !== 'visible') return;
+  const status = await probeStatus();
+  if (status.ok && status.data) handleEvent({ type: 'state', ...status.data });
+  if (!evtSource || evtSource.readyState === EventSource.CLOSED) connect();
+});
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
 initAuthFlow();
