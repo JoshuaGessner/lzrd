@@ -1,9 +1,10 @@
-const CACHE = 'lzrd-app-v6';
+const CACHE = 'lzrd-app-v7';
 const SHELL = [
   '/',
   '/style.css',
   '/app.js',
   '/manifest.json',
+  '/badge-icon.png',
   '/icon.svg',
   '/icons/icon-192.png',
   '/icons/icon-512.png',
@@ -62,7 +63,7 @@ self.addEventListener('push', e => {
       self.registration.showNotification(data.title || 'LZRD Alert', {
         body: data.body || 'Movement detected!',
         icon: data.icon || '/icons/icon-192.png',
-        badge: data.badge || '/icons/icon-192.png',
+        badge: data.badge || '/badge-icon.png',
         tag: 'lzrd-alert',
         requireInteraction: true
       })

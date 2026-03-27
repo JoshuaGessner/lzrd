@@ -28,6 +28,7 @@ import ctypes
 import base64
 import hashlib
 import hmac
+import io
 import json
 import logging
 import platform
@@ -246,13 +247,71 @@ def display_message(text: str) -> None:
     """Display a notification message to the user (non-blocking)."""
     if PLATFORM == "Windows":
         def _show() -> None:
-            ctypes.windll.user32.MessageBoxW(
-                None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
-            )
-            # MessageBoxW steals foreground, which releases ClipCursor.
-            # Re-apply the confinement if the mouse is still logically locked.
-            if _lzrd and _lzrd.mouse_locked:
-                lock_mouse_cursor()
+            try:
+                import tkinter as tk
+
+                root = tk.Tk()
+                root.withdraw()
+
+                dialog = tk.Toplevel(root)
+                dialog.title("LZRD Message")
+                dialog.resizable(False, False)
+                dialog.attributes("-topmost", True)
+
+                try:
+                    icon_image = tk.PhotoImage(file=str(TRAY_ICON_FILE))
+                    root.iconphoto(True, icon_image)
+                    dialog.iconphoto(True, icon_image)
+                    # Keep a reference so tkinter does not garbage-collect the image.
+                    dialog._lzrd_icon_image = icon_image  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                container = tk.Frame(dialog, padx=14, pady=12)
+                container.pack(fill="both", expand=True)
+
+                label = tk.Label(
+                    container,
+                    text=text,
+                    justify="left",
+                    anchor="w",
+                    wraplength=420,
+                )
+                label.pack(fill="x", expand=True)
+
+                def _close_dialog() -> None:
+                    try:
+                        dialog.destroy()
+                    finally:
+                        root.quit()
+
+                btn = tk.Button(container, text="OK", width=10, command=_close_dialog)
+                btn.pack(pady=(12, 0))
+                dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
+
+                dialog.update_idletasks()
+                width = dialog.winfo_width()
+                height = dialog.winfo_height()
+                x = max((dialog.winfo_screenwidth() - width) // 2, 0)
+                y = max((dialog.winfo_screenheight() - height) // 2, 0)
+                dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+                dialog.deiconify()
+                dialog.lift()
+                dialog.focus_force()
+                btn.focus_set()
+
+                root.mainloop()
+                root.destroy()
+            except Exception:
+                ctypes.windll.user32.MessageBoxW(
+                    None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
+                )
+            finally:
+                # Message dialogs may steal foreground/focus, which can release
+                # ClipCursor. Re-apply confinement when still logically locked.
+                if _lzrd and _lzrd.mouse_locked:
+                    lock_mouse_cursor()
     else:
         def _show() -> None:
             for cmd in [
@@ -317,6 +376,7 @@ def _broadcast(event: dict) -> None:
 _push_subscriptions: dict[str, dict] = {}  # subscription_id -> {endpoint, keys, ua}
 _push_subscriptions_lock = threading.Lock()
 _push_file = Path.home() / ".lzrd_push_subscriptions.json"
+_known_dead_push_subscriptions: set[str] = set()
 
 _vapid_public_key: str = ""
 _vapid_private_key: str = ""
@@ -394,12 +454,13 @@ def _generate_vapid_keys() -> tuple[str, str]:
 
 def _load_push_subscriptions() -> None:
     """Load push subscriptions from file."""
-    global _push_subscriptions
+    global _push_subscriptions, _known_dead_push_subscriptions
     if _push_file.exists():
         try:
             with _push_file.open('r') as f:
                 data = json.load(f)
                 _push_subscriptions = data.get('subscriptions', {})
+                _known_dead_push_subscriptions = set()
         except Exception as e:
             print(f"[LZRD] Warning: could not load push subscriptions: {e}")
 
@@ -419,9 +480,13 @@ def _send_push_notification(title: str, body: str) -> None:
     if not _vapid_public_key or not _vapid_private_key or not _vapid_claim_email:
         return
     
-    invalid_subs = []
+    invalid_subs: set[str] = set()
     with _push_subscriptions_lock:
-        subs = list(_push_subscriptions.items())
+        subs = [
+            (sub_id, sub_data)
+            for sub_id, sub_data in _push_subscriptions.items()
+            if sub_id not in _known_dead_push_subscriptions
+        ]
     
     for sub_id, sub_data in subs:
         try:
@@ -432,23 +497,45 @@ def _send_push_notification(title: str, body: str) -> None:
                     "title": title,
                     "body": body,
                     "icon": "/icons/icon-192.png",
-                    "badge": "/icons/icon-192.png"
+                    "badge": "/badge-icon.png"
                 }),
                 vapid_private_key=_vapid_private_key,
                 vapid_claims={"sub": f"mailto:{_vapid_claim_email}"}
             )
         except WebPushException as e:
-            if e.response and e.response.status_code == 410:
-                invalid_subs.append(sub_id)
-            print(f"[LZRD] Push notification failed for {sub_id}: {e}")
+            status_code = e.response.status_code if e.response else None
+            if status_code == 410:
+                invalid_subs.add(sub_id)
+            else:
+                print(f"[LZRD] Push notification failed for {sub_id}: {e}")
         except Exception as e:
             print(f"[LZRD] Push notification error for {sub_id}: {e}")
     
     if invalid_subs:
         with _push_subscriptions_lock:
             for sub_id in invalid_subs:
+                _known_dead_push_subscriptions.add(sub_id)
                 _push_subscriptions.pop(sub_id, None)
         _save_push_subscriptions()
+        print(f"[LZRD] Removed {len(invalid_subs)} expired push subscription(s).")
+
+
+def _build_notification_badge_png() -> bytes:
+    """Return a monochrome 96x96 PNG badge derived from the app icon."""
+    size = (96, 96)
+    source = _load_tray_icon_image(armed=True).convert("RGBA").resize(size)
+
+    alpha = source.getchannel("A")
+    if alpha.getbbox() is None:
+        source = _make_icon_image(armed=True).convert("RGBA").resize(size)
+        alpha = source.getchannel("A")
+
+    badge = Image.new("RGBA", size, (255, 255, 255, 0))
+    badge.putalpha(alpha)
+
+    buf = io.BytesIO()
+    badge.save(buf, format="PNG")
+    return buf.getvalue()
 
 
 # ---------------------------------------------------------------------------
@@ -855,6 +942,11 @@ def manifest_file():
     )
 
 
+@_flask_app.route("/badge-icon.png")
+def badge_icon_file():
+    return Response(_build_notification_badge_png(), mimetype="image/png")
+
+
 @_flask_app.route("/<path:filename>")
 def static_files(filename: str):
     return send_from_directory(WEB_DIR, filename)
@@ -1088,7 +1180,9 @@ def api_push_subscribe():
         for existing_id, existing_sub in list(_push_subscriptions.items()):
             if existing_sub.get("endpoint") == endpoint:
                 _push_subscriptions.pop(existing_id, None)
+                _known_dead_push_subscriptions.discard(existing_id)
         _push_subscriptions[sub_id] = subscription
+        _known_dead_push_subscriptions.discard(sub_id)
     _save_push_subscriptions()
     
     return jsonify({"ok": True, "subscription_id": sub_id})
@@ -1111,6 +1205,7 @@ def api_push_unsubscribe():
         ]
         for sub_id in to_remove:
             _push_subscriptions.pop(sub_id, None)
+            _known_dead_push_subscriptions.discard(sub_id)
     _save_push_subscriptions()
     
     return jsonify({"ok": True, "removed": len(to_remove)})

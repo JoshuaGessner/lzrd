@@ -31,6 +31,7 @@ const btnShutdown   = document.getElementById('btn-shutdown');
 const btnRestart    = document.getElementById('btn-restart');
 const btnMessage    = document.getElementById('btn-message');
 const btnLaunch     = document.getElementById('btn-launch');
+const btnInstall    = document.getElementById('btn-install');
 const msgModal      = document.getElementById('msg-modal');
 const msgInput      = document.getElementById('msg-input');
 const launchModal   = document.getElementById('launch-modal');
@@ -38,6 +39,7 @@ const launchInput   = document.getElementById('launch-input');
 const platformBadge = document.getElementById('platform-badge');
 const msgDesc       = document.getElementById('msg-desc');
 const launchDesc    = document.getElementById('launch-desc');
+let deferredInstallPrompt = null;
 
 /* ── Platform-aware UI ─────────────────────────────────────────────────── */
 function applyPlatform(platform) {
@@ -334,6 +336,7 @@ function handleEvent(data) {
         new Notification('LZRD Alert', {
           body: 'Movement detected!',
           icon: '/icons/icon-192.png',
+          badge: '/badge-icon.png',
           tag: 'lzrd-alert'
         });
       } catch (err) {
@@ -558,13 +561,43 @@ if ('serviceWorker' in navigator) {
   });
 }
 
-window.addEventListener('beforeinstallprompt', () => {
+function _isStandaloneDisplayMode() {
+  return window.matchMedia('(display-mode: standalone)').matches || window.navigator.standalone === true;
+}
+
+function _updateInstallButtonVisibility() {
+  if (!btnInstall) return;
+  const visible = Boolean(deferredInstallPrompt) && !_isStandaloneDisplayMode();
+  btnInstall.classList.toggle('hidden', !visible);
+}
+
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  deferredInstallPrompt = e;
+  _updateInstallButtonVisibility();
   console.log('[LZRD] beforeinstallprompt fired');
 });
 
 window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  _updateInstallButtonVisibility();
   console.log('[LZRD] appinstalled fired');
 });
+
+if (btnInstall) {
+  btnInstall.addEventListener('click', async () => {
+    if (!deferredInstallPrompt) return;
+    deferredInstallPrompt.prompt();
+    try {
+      const choice = await deferredInstallPrompt.userChoice;
+      console.log('[LZRD] install choice:', choice?.outcome || 'unknown');
+    } catch {
+      // Some browsers do not expose userChoice consistently.
+    }
+    deferredInstallPrompt = null;
+    _updateInstallButtonVisibility();
+  });
+}
 
 /* ── Visibility restore ────────────────────────────────────────────────── */
 document.addEventListener('visibilitychange', async () => {
@@ -585,4 +618,5 @@ window.addEventListener('online', () => {
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
+_updateInstallButtonVisibility();
 initAuthFlow();
