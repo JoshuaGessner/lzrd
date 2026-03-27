@@ -46,6 +46,9 @@ from flask import Flask, Response, jsonify, request, send_from_directory
 from PIL import Image, ImageDraw
 from pynput import mouse as pynput_mouse
 from werkzeug.middleware.proxy_fix import ProxyFix
+from pywebpush import webpush, WebPushException
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
 
 # ---------------------------------------------------------------------------
 # Paths / Platform
@@ -304,6 +307,97 @@ def _broadcast(event: dict) -> None:
     with _event_queues_lock:
         for q in list(_event_queues):
             q.put_nowait(event)
+
+
+# ---------------------------------------------------------------------------
+# Web Push infrastructure
+# ---------------------------------------------------------------------------
+
+_push_subscriptions: dict[str, dict] = {}  # subscription_id -> {endpoint, keys, ua}
+_push_subscriptions_lock = threading.Lock()
+_push_file = Path.home() / ".lzrd_push_subscriptions.json"
+
+_vapid_public_key: str = ""
+_vapid_private_key: str = ""
+_vapid_claim_email: str = ""
+
+
+def _generate_vapid_keys() -> tuple[str, str]:
+    """Generate a new VAPID key pair and return (public_key, private_key)."""
+    private_key = ec.generate_private_key(ec.SECP256R1())
+    public_key = private_key.public_key()
+    
+    private_pem = private_key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption()
+    ).decode('utf-8')
+    
+    public_pem = public_key.public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo
+    ).decode('utf-8')
+    
+    return public_pem, private_pem
+
+
+def _load_push_subscriptions() -> None:
+    """Load push subscriptions from file."""
+    global _push_subscriptions
+    if _push_file.exists():
+        try:
+            with _push_file.open('r') as f:
+                data = json.load(f)
+                _push_subscriptions = data.get('subscriptions', {})
+        except Exception as e:
+            print(f"[LZRD] Warning: could not load push subscriptions: {e}")
+
+
+def _save_push_subscriptions() -> None:
+    """Persist push subscriptions to file."""
+    try:
+        with _push_subscriptions_lock:
+            with _push_file.open('w') as f:
+                json.dump({'subscriptions': _push_subscriptions}, f)
+    except Exception as e:
+        print(f"[LZRD] Warning: could not save push subscriptions: {e}")
+
+
+def _send_push_notification(title: str, body: str) -> None:
+    """Send a push notification to all subscribed clients."""
+    if not _vapid_public_key or not _vapid_private_key or not _vapid_claim_email:
+        return
+    
+    invalid_subs = []
+    with _push_subscriptions_lock:
+        subs = list(_push_subscriptions.items())
+    
+    for sub_id, sub_data in subs:
+        try:
+            webpush(
+                subscription_info=sub_data,
+                data=json.dumps({
+                    "type": "alert",
+                    "title": title,
+                    "body": body,
+                    "icon": "/icons/icon-192.png",
+                    "badge": "/icons/icon-192.png"
+                }),
+                vapid_private_key=_vapid_private_key,
+                vapid_claims={"sub": f"mailto:{_vapid_claim_email}"}
+            )
+        except WebPushException as e:
+            if e.response and e.response.status_code == 410:
+                invalid_subs.append(sub_id)
+            print(f"[LZRD] Push notification failed for {sub_id}: {e}")
+        except Exception as e:
+            print(f"[LZRD] Push notification error for {sub_id}: {e}")
+    
+    if invalid_subs:
+        with _push_subscriptions_lock:
+            for sub_id in invalid_subs:
+                _push_subscriptions.pop(sub_id, None)
+        _save_push_subscriptions()
 
 
 # ---------------------------------------------------------------------------
@@ -811,6 +905,67 @@ def _make_sse_stream():
                 pass
 
 
+@_flask_app.route("/api/push/subscribe", methods=["POST"])
+def api_push_subscribe():
+    if not _check_token(request):
+        return _unauthorized()
+    
+    data = request.get_json(silent=True) or {}
+    subscription = data.get("subscription")
+    if not subscription or not isinstance(subscription, dict):
+        return jsonify({"error": "invalid subscription"}), 400
+    
+    endpoint = subscription.get("endpoint", "").strip()
+    if not endpoint:
+        return jsonify({"error": "missing endpoint"}), 400
+    
+    sub_id = secrets.token_urlsafe(16)
+    with _push_subscriptions_lock:
+        _push_subscriptions[sub_id] = subscription
+    _save_push_subscriptions()
+    
+    return jsonify({"ok": True, "subscription_id": sub_id})
+
+
+@_flask_app.route("/api/push/unsubscribe", methods=["POST"])
+def api_push_unsubscribe():
+    if not _check_token(request):
+        return _unauthorized()
+    
+    data = request.get_json(silent=True) or {}
+    endpoint = data.get("endpoint", "").strip()
+    if not endpoint:
+        return jsonify({"error": "missing endpoint"}), 400
+    
+    with _push_subscriptions_lock:
+        to_remove = [
+            sub_id for sub_id, sub_data in _push_subscriptions.items()
+            if sub_data.get("endpoint") == endpoint
+        ]
+        for sub_id in to_remove:
+            _push_subscriptions.pop(sub_id, None)
+    _save_push_subscriptions()
+    
+    return jsonify({"ok": True, "removed": len(to_remove)})
+
+
+@_flask_app.route("/api/push/status", methods=["GET"])
+def api_push_status():
+    if not _check_token(request):
+        return _unauthorized()
+    
+    has_vapid = bool(_vapid_public_key and _vapid_private_key)
+    with _push_subscriptions_lock:
+        sub_count = len(_push_subscriptions)
+    
+    return jsonify({
+        "ok": True,
+        "push_enabled": has_vapid,
+        "vapid_public_key": _vapid_public_key if has_vapid else None,
+        "subscriptions": sub_count
+    })
+
+
 # ---------------------------------------------------------------------------
 # Core application class
 # ---------------------------------------------------------------------------
@@ -928,6 +1083,7 @@ class LZRD:
                     "mouse_locked": self.mouse_locked,
                 }
             )
+            _send_push_notification("LZRD Alert", "Movement detected!")
 
 
 # ---------------------------------------------------------------------------
@@ -947,6 +1103,7 @@ def _run_flask(port: int) -> None:
 
 def main() -> None:
     global _config, _lzrd, _token, _token_bytes, _owner_username, _owner_password_hash
+    global _vapid_public_key, _vapid_private_key, _vapid_claim_email
 
     config = load_config()
     _config = config
@@ -961,6 +1118,15 @@ def main() -> None:
     _token_bytes = _token.encode("utf-8")
     _owner_username = config.get("auth", "owner_username", fallback="").strip()
     _owner_password_hash = config.get("auth", "owner_password_hash", fallback="").strip()
+    
+    # Load VAPID keys for Web Push (optional)
+    _vapid_public_key = config.get("server", "vapid_public_key", fallback="").strip()
+    _vapid_private_key = config.get("server", "vapid_private_key", fallback="").strip()
+    _vapid_claim_email = config.get("server", "vapid_claim_email", fallback="").strip()
+    
+    # Load push subscriptions
+    _load_push_subscriptions()
+    
     port = config.getint("server", "port", fallback=7734)
     local_ip = get_local_ip()
 

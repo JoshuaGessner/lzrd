@@ -192,6 +192,23 @@ main {
 .ctrl-btn.warning.press-flash { background: rgba(210, 153, 34, .25); border-color: var(--yellow); }
 .ctrl-btn.info.press-flash    { background: rgba(88, 166, 255, .25); border-color: var(--blue); }
 
+/* ── Push notifications ──────────────────────────────────────────────── */
+.push-status {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 14px 16px 16px;
+  margin-bottom: 20px;
+}
+.push-status p {
+  font-size: 13px;
+  color: var(--muted);
+  margin-bottom: 11px;
+}
+.push-status button {
+  width: 100%;
+}
+
 /* ── Modal overlay ───────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed; inset: 0;

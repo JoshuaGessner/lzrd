@@ -167,6 +167,123 @@ btnAuthSubmit.addEventListener('click', submitAuth);
 });
 authSetupToken.addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
 
+/* ── Push notification enrollment ──────────────────────────────────────── */
+let pushEnabled = false;
+let pushSubscription = null;
+
+async function enrollPushNotifications() {
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    console.log('[LZRD] Push notifications not supported');
+    return;
+  }
+  if (!window.isSecureContext) {
+    console.log('[LZRD] Push notifications require secure context (HTTPS)');
+    return;
+  }
+  if (Notification.permission === 'denied') {
+    console.log('[LZRD] Push notifications denied by user');
+    return;
+  }
+
+  try {
+    const reg = await navigator.serviceWorker.ready;
+    const sub = await reg.pushManager.getSubscription();
+    if (sub) {
+      pushSubscription = sub;
+      pushEnabled = true;
+      await registerPushSubscription(sub);
+      console.log('[LZRD] Push already enrolled');
+      return;
+    }
+
+    const statusRes = await fetch('/api/push/status', { credentials: 'same-origin' });
+    const statusData = await statusRes.json();
+    if (!statusData.push_enabled || !statusData.vapid_public_key) {
+      console.log('[LZRD] Server does not have Web Push configured');
+      return;
+    }
+
+    try {
+      const urlBase64ToUint8Array = (base64String) => {
+        const padding = '='.repeat((4 - base64String.length % 4) % 4);
+        const base64 = (base64String + padding)
+          .replace(/\-/g, '+')
+          .replace(/_/g, '/');
+        return new Uint8Array(atob(base64).split('').map(c => c.charCodeAt(0)));
+      };
+
+      const sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(statusData.vapid_public_key)
+      });
+      pushSubscription = sub;
+      pushEnabled = true;
+      await registerPushSubscription(sub);
+      console.log('[LZRD] Push enrollment successful');
+    } catch (e) {
+      console.warn('[LZRD] Push subscription failed:', e);
+    }
+  } catch (e) {
+    console.warn('[LZRD] Push enrollment error:', e);
+  }
+}
+
+async function registerPushSubscription(subscription) {
+  try {
+    await fetch('/api/push/subscribe', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({ subscription: subscription.toJSON() })
+    });
+  } catch (e) {
+    console.warn('[LZRD] Could not register subscription:', e);
+  }
+}
+
+function updatePushStatusUI() {
+  const statusEl = document.getElementById('push-status');
+  const messageEl = document.getElementById('push-message');
+  const btnEl = document.getElementById('btn-enable-push');
+
+  if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
+    messageEl.textContent = 'Push notifications not supported on this device.';
+    btnEl.classList.add('hidden');
+    return;
+  }
+
+  if (!window.isSecureContext) {
+    messageEl.textContent = 'Requires secure connection (HTTPS) for background alerts.';
+    btnEl.classList.add('hidden');
+    return;
+  }
+
+  if (Notification.permission === 'denied') {
+    messageEl.textContent = 'Background notifications blocked. Check your browser permissions.';
+    btnEl.classList.add('hidden');
+    return;
+  }
+
+  if (pushEnabled) {
+    messageEl.textContent = '✓ Background alerts enabled. You will receive notifications when the app is closed.';
+    btnEl.classList.add('hidden');
+    return;
+  }
+
+  messageEl.textContent = 'Enable background alerts for movement notifications when the app is closed.';
+  btnEl.classList.remove('hidden');
+  btnEl.addEventListener('click', async () => {
+    if (Notification.permission !== 'granted') {
+      Notification.requestPermission().then(perm => {
+        if (perm === 'granted') enrollPushNotifications();
+      });
+    } else {
+      await enrollPushNotifications();
+      updatePushStatusUI();
+    }
+  });
+}
+
 /* ── SSE connection ────────────────────────────────────────────────────── */
 function connect() {
   if (reconnectTimer) {
@@ -198,6 +315,9 @@ async function handleDisconnect() {
     showAuthModal('login', 'Session expired. Sign in again.');
     return;
   }
+  if (document.visibilityState !== 'visible') {
+    return;
+  }
   reconnectTimer = setTimeout(connect, 5000);
 }
 
@@ -210,8 +330,16 @@ function setConn(state) {
 function handleEvent(data) {
   if (data.type === 'alert') {
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    if (Notification.permission === 'granted') {
-      new Notification('LZRD Alert', { body: 'Movement detected!', icon: '/icons/icon-192.png', tag: 'lzrd-alert' });
+    if ('Notification' in window && Notification.permission === 'granted') {
+      try {
+        new Notification('LZRD Alert', {
+          body: 'Movement detected!',
+          icon: '/icons/icon-192.png',
+          tag: 'lzrd-alert'
+        });
+      } catch (err) {
+        console.warn('[LZRD] Notification failed:', err);
+      }
     }
   }
   if (data.platform     !== undefined) applyPlatform(data.platform);
@@ -306,8 +434,12 @@ async function connectAfterAuth() {
     return;
   }
   handleEvent({ type: 'state', ...status.data });
-  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+  if ('Notification' in window && window.isSecureContext && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
   connect();
+  enrollPushNotifications().catch(() => {});
+  updatePushStatusUI();
 }
 
 async function initAuthFlow() {
@@ -336,8 +468,12 @@ async function initAuthFlow() {
   }
   handleEvent({ type: 'state', ...status.data });
   hideAuthModal();
-  if ('Notification' in window && Notification.permission === 'default') Notification.requestPermission();
+  if ('Notification' in window && window.isSecureContext && Notification.permission === 'default') {
+    Notification.requestPermission().catch(() => {});
+  }
   connect();
+  enrollPushNotifications().catch(() => {});
+  updatePushStatusUI();
 }
 
 /* ── Button press flash ────────────────────────────────────────────────── */
@@ -425,10 +561,27 @@ if ('serviceWorker' in navigator) {
 /* ── Visibility restore ────────────────────────────────────────────────── */
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
+
+  if (reconnectTimer) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+  if (evtSource) {
+    evtSource.close();
+    evtSource = null;
+  }
+
   const status = await probeStatus();
-  if (status.ok && status.data) handleEvent({ type: 'state', ...status.data });
-  if (!evtSource || evtSource.readyState === EventSource.CLOSED) connect();
+  if (!status.ok && status.status === 401) {
+    showAuthModal('login', 'Session expired. Sign in again.');
+    return;
+  }
+  if (status.ok && status.data) {
+    handleEvent({ type: 'state', ...status.data });
+  }
+  connect();
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
 initAuthFlow();
+updatePushStatusUI();

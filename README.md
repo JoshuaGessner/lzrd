@@ -239,6 +239,49 @@ sudo ufw allow from 192.168.0.0/16 to any port 7734
 
 ---
 
+## Background alerts and push notifications
+
+When LZRD is installed as a PWA, you can enable **background alerts** so your phone notifies you of movement even when the app is completely closed.
+
+### Setup (requires HTTPS domain)
+
+For background push notifications to work, your LZRD must be served over **HTTPS** with a domain name (not just a local IP). This is because the Web Push API requires a secure context.
+
+**Option 1: Remote access via Caddy (recommended)**
+
+If you want to control LZRD from anywhere, set it up behind Caddy with automatic HTTPS (see "Remote access via Caddy" section below). Once Caddy is running, background push automatically works.
+
+**Option 2: Local network with HTTPS**
+
+You can set up a self-signed certificate for local HTTPS access, but most phone browsers will show security warnings. Caddy with a real domain is simpler and recommended.
+
+### Enabling background alerts
+
+1. Make sure LZRD is accessed over **HTTPS** (check the browser address bar).
+2. Open LZRD and sign in.
+3. Scroll down to the **Notifications** section.
+4. Tap **Enable Background Alerts**.
+5. Your browser will ask for permission to send notifications — tap **Allow**.
+6. Once enabled, a checkmark appears and you're ready to go.
+
+### How it works
+
+- **App open in foreground**: Instant vibration and red banner alert.
+- **App backgrounded but running**: Push notification appears on your phone.
+- **App completely closed**: Push notification appears (if PWA is installed).
+
+### Troubleshooting push notifications
+
+| Symptom | Likely cause | Solution |
+|---------|-------------|----------|
+| "Push notifications not supported" | Older browser or limited device | Try Chrome/Edge (Android) or Safari (iOS with Caddy) |
+| "Requires secure connection (HTTPS)" | Accessing via HTTP or local IP only | Switch to HTTPS domain (use Caddy) |
+| "Background notifications blocked" | User denied permission on browser/device | Check Settings → Notifications and allow for the app |
+| Notifications not arriving but page is open | Normal — page-level alerts work instead | Notifications are for closed/backgrounded app only |
+| Notifications work once but stop | Subscription expired or max age reached | Re-enable background alerts if they stop working |
+
+---
+
 ## Remote access via Caddy (access from anywhere)
 
 If you want to control your PC from outside your home network — from a coffee shop, at work, or anywhere — you can put LZRD behind [Caddy](https://caddyserver.com/), a free reverse proxy that adds HTTPS automatically.
@@ -261,6 +304,53 @@ public_url   = https://lzrd.yourdomain.com
 
 `behind_proxy = true` tells LZRD to read the real client IP from the `X-Forwarded-For` header that Caddy adds, so that per-IP rate limiting works correctly for remote users.
 
+### Step 1b — (Optional) Generate VAPID keys for push notifications
+
+To enable background push notifications, you need to generate a VAPID key pair. VAPID keys are used by Web Push servers to authenticate message delivery.
+
+Generate keys using Python (requires the `cryptography` package, already in requirements.txt):
+
+```bash
+python3 -c "
+from cryptography.hazmat.primitives.asymmetric import ec
+from cryptography.hazmat.primitives import serialization
+
+private_key = ec.generate_private_key(ec.SECP256R1())
+public_key = private_key.public_key()
+
+private_pem = private_key.private_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PrivateFormat.PKCS8,
+    encryption_algorithm=serialization.NoEncryption()
+).decode('utf-8')
+
+public_pem = public_key.public_bytes(
+    encoding=serialization.Encoding.PEM,
+    format=serialization.PublicFormat.SubjectPublicKeyInfo
+).decode('utf-8')
+
+print('VAPID Public Key:')
+print(public_pem)
+print('\nVAPID Private Key:')
+print(private_pem)
+"
+```
+
+Copy both keys into `config.ini` under the `[server]` section:
+
+```ini
+[server]
+behind_proxy = true
+public_url   = https://lzrd.yourdomain.com
+vapid_public_key  = -----BEGIN PUBLIC KEY-----...
+vapid_private_key = -----BEGIN PRIVATE KEY-----...
+vapid_claim_email = your-email@example.com
+```
+
+Replace `your-email@example.com` with a valid email. Push services may use this to contact you if needed.
+
+Once VAPID keys are set, users can enable "Background Alerts" on their phones to receive notifications when LZRD is backgrounded or closed.
+
 ### Step 2 — Set up Caddy
 
 A ready-to-use `Caddyfile` is included in the repository. Edit it to replace `lzrd.yourdomain.com` with your actual domain, then run:
@@ -270,6 +360,16 @@ caddy run --config Caddyfile
 ```
 
 Caddy will automatically obtain and renew a TLS certificate from Let's Encrypt.  Once it is running, open `https://lzrd.yourdomain.com` on your phone — everything works exactly the same as on your local network, and with HTTPS you get the full PWA install experience on iOS Safari too.
+
+### Step 3 — Enable push notifications (if VAPID keys are set)
+
+Once Caddy is running and you access LZRD over HTTPS, users can install LZRD as a PWA and enable background alerts:
+
+1. Open the installed PWA on your phone  
+2. Scroll to **Notifications**  
+3. Tap **Enable Background Alerts**  
+4. Allow notifications when prompted  
+5. Movement alerts will now reach your phone even when LZRD is closed
 
 > **Security reminder:** Your owner password and LZRD token both matter for remote exposure. Keep the owner password strong, and keep the token unique (LZRD generates a secure random token automatically on first run).
 

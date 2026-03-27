@@ -54,3 +54,35 @@ self.addEventListener('fetch', e => {
     }
   })());
 });
+
+self.addEventListener('push', e => {
+  try {
+    const data = e.data ? e.data.json() : { title: 'LZRD Alert', body: 'Movement detected!' };
+    e.waitUntil(
+      self.registration.showNotification(data.title || 'LZRD Alert', {
+        body: data.body || 'Movement detected!',
+        icon: data.icon || '/icons/icon-192.png',
+        badge: data.badge || '/icons/icon-192.png',
+        tag: 'lzrd-alert',
+        requireInteraction: true
+      })
+    );
+  } catch (err) {
+    console.error('[LZRD SW] Push event error:', err);
+  }
+});
+
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(
+    clients.matchAll({ type: 'window' })
+      .then(clientList => {
+        for (let client of clientList) {
+          if (client.url === '/' && 'focus' in client) {
+            return client.focus();
+          }
+        }
+        if (clients.openWindow) return clients.openWindow('/');
+      })
+  );
+});
