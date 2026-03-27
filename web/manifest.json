@@ -2,6 +2,8 @@
   "name": "LZRD Remote",
   "short_name": "LZRD",
   "description": "Mouse-movement tripwire and PC remote control",
+  "id": "/",
+  "scope": "/",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#1a1a1a",

@@ -826,6 +826,15 @@ def index():
     return send_from_directory(WEB_DIR, "index.html")
 
 
+@_flask_app.route("/manifest.json")
+def manifest_file():
+    return send_from_directory(
+        WEB_DIR,
+        "manifest.json",
+        mimetype="application/manifest+json",
+    )
+
+
 @_flask_app.route("/<path:filename>")
 def static_files(filename: str):
     return send_from_directory(WEB_DIR, filename)

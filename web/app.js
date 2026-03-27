@@ -331,7 +331,38 @@ async function handleDisconnect() {
   if (document.visibilityState !== 'visible') {
     return;
   }
-  reconnectTimer = setTimeout(connect, 5000);
+  reconnectTimer = setTimeout(() => {
+    recoverConnectionNow('disconnect-timer').catch(() => {});
+  }, 5000);
+}
+
+async function recoverConnectionNow(reason = 'manual') {
+  if (recoveringVisibility) return;
+  recoveringVisibility = true;
+  try {
+    if (reconnectTimer) {
+      clearTimeout(reconnectTimer);
+      reconnectTimer = null;
+    }
+    if (evtSource) {
+      evtSource.close();
+      evtSource = null;
+    }
+
+    const status = await probeStatus();
+    if (!status.ok && status.status === 401) {
+      showAuthModal('login', 'Session expired. Sign in again.');
+      return;
+    }
+    if (status.ok && status.data) {
+      handleEvent({ type: 'state', ...status.data });
+    }
+    connect();
+  } catch (err) {
+    console.warn(`[LZRD] Recover failed (${reason}):`, err);
+  } finally {
+    recoveringVisibility = false;
+  }
 }
 
 function setConn(state) {
@@ -560,38 +591,38 @@ if ('serviceWorker' in navigator) {
   });
 
   navigator.serviceWorker.register('/sw.js').then(reg => {
+    console.log('[LZRD] Service worker ready:', reg.scope);
     reg.update().catch(() => {});
     setInterval(() => reg.update().catch(() => {}), 60 * 1000);
-  }).catch(() => {});
+  }).catch(err => {
+    console.warn('[LZRD] Service worker registration failed:', err);
+  });
 }
+
+window.addEventListener('beforeinstallprompt', () => {
+  console.log('[LZRD] beforeinstallprompt fired');
+});
+
+window.addEventListener('appinstalled', () => {
+  console.log('[LZRD] appinstalled fired');
+});
 
 /* ── Visibility restore ────────────────────────────────────────────────── */
 document.addEventListener('visibilitychange', async () => {
   if (document.visibilityState !== 'visible') return;
-  if (recoveringVisibility) return;
-  recoveringVisibility = true;
-  try {
-    if (reconnectTimer) {
-      clearTimeout(reconnectTimer);
-      reconnectTimer = null;
-    }
-    if (evtSource) {
-      evtSource.close();
-      evtSource = null;
-    }
+  recoverConnectionNow('visibility').catch(() => {});
+});
 
-    const status = await probeStatus();
-    if (!status.ok && status.status === 401) {
-      showAuthModal('login', 'Session expired. Sign in again.');
-      return;
-    }
-    if (status.ok && status.data) {
-      handleEvent({ type: 'state', ...status.data });
-    }
-    connect();
-  } finally {
-    recoveringVisibility = false;
-  }
+window.addEventListener('pageshow', () => {
+  recoverConnectionNow('pageshow').catch(() => {});
+});
+
+window.addEventListener('focus', () => {
+  recoverConnectionNow('focus').catch(() => {});
+});
+
+window.addEventListener('online', () => {
+  recoverConnectionNow('online').catch(() => {});
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
