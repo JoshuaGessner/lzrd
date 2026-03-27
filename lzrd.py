@@ -330,6 +330,23 @@ def _public_key_to_vapid_b64(public_key: ec.EllipticCurvePublicKey) -> str:
     return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
 
 
+def _private_pem_to_raw_b64(pem: str) -> str:
+    """Convert a PKCS8 EC PEM private key to the raw base64url form pywebpush expects.
+
+    py_vapid's ``Vapid.from_string`` base64url-decodes the key string and expects
+    exactly 32 bytes (the raw private key integer).  Passing a PEM string directly
+    causes an ASN.1 parse error because the PEM text is not valid base64url.
+    """
+    try:
+        priv_obj = serialization.load_pem_private_key(pem.encode("utf-8"), password=None)
+        if isinstance(priv_obj, ec.EllipticCurvePrivateKey):
+            raw = priv_obj.private_numbers().private_value.to_bytes(32, "big")
+            return base64.urlsafe_b64encode(raw).decode("ascii").rstrip("=")
+    except Exception:
+        pass
+    return ""
+
+
 def _normalize_vapid_public_key(public_key_value: str, private_pem: str) -> str:
     """Return URL-safe base64 VAPID public key from base64/PEM/derived private key."""
     candidate = (public_key_value or "").strip()
@@ -652,7 +669,10 @@ def _ensure_vapid_config(config: configparser.ConfigParser) -> tuple[str, str, s
             config.write(fh)
         print("[LZRD] Web Push config updated in config.ini.")
 
-    return public_key, private_key, claim_email
+    # pywebpush (py_vapid) expects the private key as the raw 32-byte private
+    # integer base64url-encoded, not as a PEM string.  The PEM stays in
+    # config.ini; only the in-memory form returned here is converted.
+    return public_key, _private_pem_to_raw_b64(private_key), claim_email
 
 
 def _check_raw_token(req: "request") -> bool:
