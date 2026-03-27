@@ -344,6 +344,58 @@ _MIN_PASSWORD_LEN = 8
 _MAX_PASSWORD_LEN = 256
 _PBKDF2_ITERATIONS = 200_000
 
+# Rolling setup keyword — short human-friendly code for first-time owner setup.
+_SETUP_KEYWORD_ROLL_SECS = 300  # regenerate every 5 minutes
+_SETUP_WORDS = [
+    "amber", "blade", "cedar", "delta", "ember", "frost", "grain", "hatch",
+    "ivory", "jewel", "knack", "latch", "maple", "north", "oasis", "pearl",
+    "quail", "raven", "solar", "thorn", "ultra", "vivid", "waltz", "xenon",
+    "acorn", "blaze", "cliff", "dusk", "eagle", "fable", "globe", "haven",
+    "inlet", "kite", "lunar", "marsh", "noble", "olive", "plume", "quest",
+    "ridge", "storm", "trail", "umbra", "vault", "wren", "zinc", "apex",
+    "birch", "crane", "drift", "echo", "flame", "grove", "helm", "iron",
+    "jade", "kelp", "lynx", "mist", "nexus", "orbit", "prism", "reef",
+    "sage", "tide", "unity", "crest", "flint", "coral",
+]
+_setup_keyword: str = ""
+_setup_keyword_lock = threading.Lock()
+
+
+def _generate_setup_keyword() -> str:
+    """Return a fresh two-word setup keyword like 'amber-blade'."""
+    return f"{secrets.choice(_SETUP_WORDS)}-{secrets.choice(_SETUP_WORDS)}"
+
+
+def _roll_setup_keyword() -> None:
+    """Replace the current setup keyword with a new random one."""
+    global _setup_keyword
+    with _setup_keyword_lock:
+        _setup_keyword = _generate_setup_keyword()
+
+
+def _get_setup_keyword() -> str:
+    """Return the current setup keyword."""
+    with _setup_keyword_lock:
+        return _setup_keyword
+
+
+def _verify_setup_keyword(candidate: str) -> bool:
+    """Return True when *candidate* matches the current setup keyword (case-insensitive)."""
+    with _setup_keyword_lock:
+        if not _setup_keyword:
+            return False
+        return hmac.compare_digest(
+            candidate.lower().strip().encode("utf-8"),
+            _setup_keyword.lower().encode("utf-8"),
+        )
+
+
+def _setup_keyword_roller() -> None:
+    """Background thread: roll the setup keyword every *_SETUP_KEYWORD_ROLL_SECS*."""
+    while True:
+        time.sleep(_SETUP_KEYWORD_ROLL_SECS)
+        _roll_setup_keyword()
+
 
 def _config_has_owner_credentials() -> bool:
     return bool(_owner_username and _owner_password_hash)
@@ -578,10 +630,12 @@ def api_auth_setup():
 
     if _config_has_owner_credentials():
         return jsonify({"error": "owner already configured"}), 409
-    if not _check_raw_token(request):
-        return _unauthorized()
 
     data = request.get_json(silent=True) or {}
+    setup_code = str(data.get("setup_code", "")).strip()
+    if not _verify_setup_keyword(setup_code):
+        _record_auth_failure(request.remote_addr or "")
+        return _unauthorized()
     username = str(data.get("username", "")).strip()
     password = str(data.get("password", ""))
 
@@ -918,6 +972,12 @@ def main() -> None:
 
     _lzrd = LZRD(config)
 
+    # Generate the initial setup keyword and start the rolling timer.
+    _roll_setup_keyword()
+    threading.Thread(
+        target=_setup_keyword_roller, daemon=True, name="lzrd-setup-roll"
+    ).start()
+
     # Start Flask in a background daemon thread
     threading.Thread(
         target=_run_flask, args=(port,), daemon=True, name="lzrd-web"
@@ -928,8 +988,8 @@ def main() -> None:
         arm_label = "Disarm" if _lzrd.armed else "Arm"
         arm_action = _lzrd.disarm if _lzrd.armed else _lzrd.arm
 
-        def _show_token(icon, item) -> None:
-            display_message(f"Access token:\n\n{_token}")
+        def _show_setup_code(icon, item) -> None:
+            display_message(f"Setup code:\n\n{_get_setup_keyword()}")
 
         def _reset_owner(icon, item) -> None:
             if _reset_owner_credentials():
@@ -945,7 +1005,7 @@ def main() -> None:
             pystray.Menu.SEPARATOR,
             pystray.MenuItem(arm_label, lambda icon, item: arm_action()),
             pystray.Menu.SEPARATOR,
-            pystray.MenuItem("Show Access Token", _show_token),
+            pystray.MenuItem("Show Setup Code", _show_setup_code),
             pystray.MenuItem("Reset Owner Credentials", _reset_owner),
             pystray.MenuItem("Lock Screen Now", lambda icon, item: lock_workstation()),
             pystray.Menu.SEPARATOR,

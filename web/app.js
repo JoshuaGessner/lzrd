@@ -72,7 +72,7 @@ function setAuthMode(mode, errorText = '') {
 
   if (mode === 'setup') {
     authTitle.textContent = '🦎 Create Owner Account';
-    authDesc.textContent = 'First launch detected. Enter tray setup token, then create owner credentials.';
+    authDesc.textContent = 'First launch detected. Enter the setup code from the tray icon, then create owner credentials.';
     btnAuthSubmit.textContent = 'Create Account';
     authSetupToken.classList.remove('hidden');
     authPassword.setAttribute('autocomplete', 'new-password');
@@ -109,7 +109,7 @@ async function submitAuth() {
   const password2 = authPassword2.value;
 
   if (authMode === 'setup' && !setupToken) {
-    setAuthMode(authMode, 'Setup token is required.');
+    setAuthMode(authMode, 'Setup code is required.');
     return;
   }
   if (!username || !password) {
@@ -122,12 +122,13 @@ async function submitAuth() {
   }
 
   const endpoint = authMode === 'setup' ? '/api/auth/setup' : '/api/auth/login';
-  const setupHeaders = authMode === 'setup' ? { 'X-Token': setupToken } : {};
+  const body = { username, password };
+  if (authMode === 'setup') body.setup_code = setupToken;
   const res = await fetch(endpoint, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...setupHeaders },
+    headers: { 'Content-Type': 'application/json' },
     credentials: 'same-origin',
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify(body),
   });
 
   if (res.ok) {
@@ -141,7 +142,7 @@ async function submitAuth() {
     return;
   }
   if (res.status === 401 && authMode === 'setup') {
-    showAuthModal('setup', 'Invalid setup token. Use Show Access Token from tray.');
+    showAuthModal('setup', 'Invalid setup code. Right-click the tray icon → Show Setup Code.');
     return;
   }
   if (res.status === 400 && authMode === 'login') {

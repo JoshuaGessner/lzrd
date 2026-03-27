@@ -330,6 +330,7 @@ class TestFlaskAPI(unittest.TestCase):
         lzrd_module._token_bytes = b"testtoken"
         lzrd_module._owner_username = ""
         lzrd_module._owner_password_hash = ""
+        lzrd_module._setup_keyword = "amber-blade"
         lzrd_module._config = self.cfg
         lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
         lzrd_module._lzrd.on_state_change = MagicMock()
@@ -341,6 +342,7 @@ class TestFlaskAPI(unittest.TestCase):
         lzrd_module._failed_auth.clear()
         lzrd_module._owner_username = ""
         lzrd_module._owner_password_hash = ""
+        lzrd_module._setup_keyword = ""
         lzrd_module._config = None
 
     # Helpers
@@ -359,19 +361,17 @@ class TestFlaskAPI(unittest.TestCase):
     def test_setup_then_cookie_auth_allows_status(self):
         r = self.client.post(
             "/api/auth/setup",
-            json={"username": "owner", "password": "strongpass123"},
-            headers={"X-Token": "testtoken"},
+            json={"username": "owner", "password": "strongpass123", "setup_code": "amber-blade"},
         )
         self.assertEqual(r.status_code, 200)
         # Same test client keeps response cookies automatically.
         r2 = self.client.get("/api/status")
         self.assertEqual(r2.status_code, 200)
 
-    def test_setup_requires_valid_token(self):
+    def test_setup_requires_valid_setup_code(self):
         r = self.client.post(
             "/api/auth/setup",
-            json={"username": "owner", "password": "strongpass123"},
-            headers={"X-Token": "wrong"},
+            json={"username": "owner", "password": "strongpass123", "setup_code": "wrong-code"},
         )
         self.assertEqual(r.status_code, 401)
 
@@ -379,8 +379,7 @@ class TestFlaskAPI(unittest.TestCase):
         setup_client = lzrd_module._flask_app.test_client()
         setup_client.post(
             "/api/auth/setup",
-            json={"username": "owner", "password": "strongpass123"},
-            headers={"X-Token": "testtoken"},
+            json={"username": "owner", "password": "strongpass123", "setup_code": "amber-blade"},
         )
 
         login_client = lzrd_module._flask_app.test_client()
@@ -578,6 +577,50 @@ class TestOwnerReset(unittest.TestCase):
             lzrd_module._config = original_cfg
             lzrd_module._owner_username = original_user
             lzrd_module._owner_password_hash = original_hash
+
+
+# ---------------------------------------------------------------------------
+# TestSetupKeyword
+# ---------------------------------------------------------------------------
+
+class TestSetupKeyword(unittest.TestCase):
+    """Tests for the rolling setup keyword used during first-time owner setup."""
+
+    def setUp(self):
+        self._orig = lzrd_module._setup_keyword
+
+    def tearDown(self):
+        lzrd_module._setup_keyword = self._orig
+
+    def test_generate_setup_keyword_format(self):
+        kw = lzrd_module._generate_setup_keyword()
+        parts = kw.split("-")
+        self.assertEqual(len(parts), 2)
+        self.assertIn(parts[0], lzrd_module._SETUP_WORDS)
+        self.assertIn(parts[1], lzrd_module._SETUP_WORDS)
+
+    def test_roll_changes_keyword(self):
+        lzrd_module._setup_keyword = "fixed-value"
+        lzrd_module._roll_setup_keyword()
+        self.assertNotEqual(lzrd_module._setup_keyword, "")
+        # Very unlikely (but possible) to get the same value
+        parts = lzrd_module._setup_keyword.split("-")
+        self.assertEqual(len(parts), 2)
+
+    def test_verify_setup_keyword_case_insensitive(self):
+        lzrd_module._setup_keyword = "amber-blade"
+        self.assertTrue(lzrd_module._verify_setup_keyword("amber-blade"))
+        self.assertTrue(lzrd_module._verify_setup_keyword("AMBER-BLADE"))
+        self.assertTrue(lzrd_module._verify_setup_keyword("Amber-Blade"))
+
+    def test_verify_setup_keyword_rejects_wrong(self):
+        lzrd_module._setup_keyword = "amber-blade"
+        self.assertFalse(lzrd_module._verify_setup_keyword("wrong-code"))
+        self.assertFalse(lzrd_module._verify_setup_keyword(""))
+
+    def test_verify_empty_keyword_rejects_all(self):
+        lzrd_module._setup_keyword = ""
+        self.assertFalse(lzrd_module._verify_setup_keyword("anything"))
 
 
 # ---------------------------------------------------------------------------
@@ -800,6 +843,7 @@ class TestSecurity(unittest.TestCase):
         lzrd_module._token_bytes = b"testtoken"
         lzrd_module._owner_username = ""
         lzrd_module._owner_password_hash = ""
+        lzrd_module._setup_keyword = "amber-blade"
         lzrd_module._config = self.cfg
         lzrd_module._lzrd = lzrd_module.LZRD(self.cfg)
         lzrd_module._lzrd.on_state_change = MagicMock()
@@ -811,6 +855,7 @@ class TestSecurity(unittest.TestCase):
         lzrd_module._failed_auth.clear()
         lzrd_module._owner_username = ""
         lzrd_module._owner_password_hash = ""
+        lzrd_module._setup_keyword = ""
         lzrd_module._config = None
 
     # Helpers
