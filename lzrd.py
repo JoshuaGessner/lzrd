@@ -27,6 +27,7 @@ import argparse
 import configparser
 import ctypes
 import base64
+import tempfile
 import hashlib
 import hmac
 import io
@@ -71,6 +72,25 @@ PLATFORM = platform.system()
 # ---------------------------------------------------------------------------
 
 
+def _atomic_write_config(config: configparser.ConfigParser) -> None:
+    """Write *config* to CONFIG_FILE atomically via temp-file + rename."""
+    fd = tempfile.NamedTemporaryFile(
+        mode="w", encoding="utf-8", suffix=".tmp",
+        dir=CONFIG_FILE.parent, delete=False,
+    )
+    try:
+        config.write(fd)
+        fd.close()
+        os.replace(fd.name, CONFIG_FILE)
+    except BaseException:
+        fd.close()
+        try:
+            os.unlink(fd.name)
+        except OSError:
+            pass
+        raise
+
+
 def load_config() -> configparser.ConfigParser:
     """Load and return the INI config, creating it with a random token on first run."""
     config = configparser.ConfigParser()
@@ -79,8 +99,7 @@ def load_config() -> configparser.ConfigParser:
         config["server"] = {"port": "7734", "token": token}
         config["lzrd"] = {"movement_threshold": "10"}
         config["auth"] = {"owner_username": "", "owner_password_hash": ""}
-        with CONFIG_FILE.open("w", encoding="utf-8") as fh:
-            config.write(fh)
+        _atomic_write_config(config)
         print(f"[LZRD] Created {CONFIG_FILE} with a new random access token.")
         return config
     config.read(CONFIG_FILE, encoding="utf-8")
@@ -714,28 +733,38 @@ def _config_has_owner_credentials() -> bool:
 
 
 def _write_config() -> None:
-    """Persist current config state to config.ini."""
+    """Persist current config state to config.ini.
+
+    Re-reads the on-disk config first and merges in-memory changes on top so
+    that values written by other code paths (e.g. token rotation, auth setup)
+    are never silently overwritten by a stale in-memory snapshot.
+    The on-disk server token always takes precedence because it may have been
+    rotated after this process cached its copy.
+    """
     if _config is None:
         return
 
-    # Preserve the on-disk token if this process has stale in-memory config.
-    # This prevents unrelated writes (e.g. auth updates) from rolling back a
-    # manually rotated token while the app is still running.
-    disk_cfg = configparser.ConfigParser()
+    merged = configparser.ConfigParser()
+    disk_token = ""
     try:
         if CONFIG_FILE.exists():
-            disk_cfg.read(CONFIG_FILE, encoding="utf-8")
-            disk_token = _normalize_token(disk_cfg.get("server", "token", fallback=""))
-            if disk_token:
-                if not _config.has_section("server"):
-                    _config.add_section("server")
-                _config.set("server", "token", disk_token)
+            merged.read(CONFIG_FILE, encoding="utf-8")
+            disk_token = _normalize_token(merged.get("server", "token", fallback=""))
     except Exception:
-        # Fall back to writing current in-memory config if disk read fails.
         pass
 
-    with CONFIG_FILE.open("w", encoding="utf-8") as fh:
-        _config.write(fh)
+    # Layer in-memory sections/values on top of the disk snapshot.
+    for section in _config.sections():
+        if not merged.has_section(section):
+            merged.add_section(section)
+        for key, value in _config.items(section):
+            merged.set(section, key, value)
+
+    # Restore the on-disk token so a stale in-memory copy can't roll it back.
+    if disk_token:
+        merged.set("server", "token", disk_token)
+
+    _atomic_write_config(merged)
 
 
 def _reset_owner_credentials() -> bool:
@@ -779,8 +808,7 @@ def _ensure_server_token(config: configparser.ConfigParser) -> str:
 
     rotated = secrets.token_urlsafe(32)
     config.set("server", "token", rotated)
-    with CONFIG_FILE.open("w", encoding="utf-8") as fh:
-        config.write(fh)
+    _atomic_write_config(config)
 
     print(
         "[LZRD] Warning: weak or missing [server] token detected. "
@@ -819,8 +847,7 @@ def _ensure_vapid_config(config: configparser.ConfigParser) -> tuple[str, str, s
         changed = True
 
     if changed:
-        with CONFIG_FILE.open("w", encoding="utf-8") as fh:
-            config.write(fh)
+        _atomic_write_config(config)
         print("[LZRD] Web Push config updated in config.ini.")
 
     # pywebpush (py_vapid) expects the private key as the raw 32-byte private
@@ -1510,6 +1537,11 @@ def main() -> None:
     _token_bytes = _token.encode("utf-8")
     _owner_username = config.get("auth", "owner_username", fallback="").strip()
     _owner_password_hash = config.get("auth", "owner_password_hash", fallback="").strip()
+
+    if _owner_username:
+        print(f"[LZRD] Owner account loaded: {_owner_username}")
+    else:
+        print("[LZRD] No owner account configured — first visitor will see setup screen.")
 
     _vapid_public_key, _vapid_private_key, _vapid_claim_email = _ensure_vapid_config(config)
     

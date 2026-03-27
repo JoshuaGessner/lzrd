@@ -99,7 +99,15 @@ function setAuthMode(mode, errorText = '') {
 function showAuthModal(mode, errorText = '') {
   setAuthMode(mode, errorText);
   authModal.classList.remove('hidden');
-  authUsername.focus();
+  // Clear stale values when (re-)showing the modal
+  authSetupToken.value = '';
+  authPassword.value = '';
+  authPassword2.value = '';
+  if (mode === 'setup') {
+    authSetupToken.focus();
+  } else {
+    authUsername.focus();
+  }
 }
 
 function hideAuthModal() {
