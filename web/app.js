@@ -583,9 +583,15 @@ function showToast(msg, type = '') {
 }
 
 /* ── Service worker ────────────────────────────────────────────────────── */
+const _swPageLoadTime = Date.now();
 if ('serviceWorker' in navigator) {
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (window.__lzrdSwRefreshing) return;
+    // Suppress reload if controller changed within the first 5 s of page load —
+    // this is the SW activating on first install, not a genuine update. Reloading
+    // here races with the browser's PWA install-criteria check and kills the
+    // beforeinstallprompt event.
+    if (Date.now() - _swPageLoadTime < 5000) return;
     window.__lzrdSwRefreshing = true;
     window.location.reload();
   });

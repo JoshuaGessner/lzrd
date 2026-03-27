@@ -813,7 +813,7 @@ def _add_security_headers(response):
     if request.path.startswith("/api/") and request.path != "/api/events":
         response.headers["Cache-Control"] = "no-store"
     elif request.path == "/":
-        response.headers["Cache-Control"] = "no-store, must-revalidate"
+        response.headers["Cache-Control"] = "no-cache"
     elif request.path == "/sw.js":
         response.headers["Cache-Control"] = "no-cache, must-revalidate"
     else:
