@@ -245,6 +245,10 @@ def display_message(text: str) -> None:
             ctypes.windll.user32.MessageBoxW(
                 None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
             )
+            # MessageBoxW steals foreground, which releases ClipCursor.
+            # Re-apply the confinement if the mouse is still logically locked.
+            if _lzrd and _lzrd.mouse_locked:
+                lock_mouse_cursor()
     else:
         def _show() -> None:
             for cmd in [

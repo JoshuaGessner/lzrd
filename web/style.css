@@ -187,6 +187,11 @@ main {
 
 .ctrl-btn.active-state { background: rgba(109, 191, 74, .1); border-color: var(--green); }
 
+.ctrl-btn.press-flash { transition: background 0s, border-color 0s; }
+.ctrl-btn.danger.press-flash  { background: rgba(224, 80, 64, .25); border-color: var(--red); }
+.ctrl-btn.warning.press-flash { background: rgba(210, 153, 34, .25); border-color: var(--yellow); }
+.ctrl-btn.info.press-flash    { background: rgba(88, 166, 255, .25); border-color: var(--blue); }
+
 /* ── Modal overlay ───────────────────────────────────────────────────── */
 .modal-overlay {
   position: fixed; inset: 0;

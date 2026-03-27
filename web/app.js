@@ -327,33 +327,44 @@ async function initAuthFlow() {
   connect();
 }
 
+/* ── Button press flash ────────────────────────────────────────────────── */
+function flashBtn(btn) {
+  btn.blur();
+  btn.classList.add('press-flash');
+  setTimeout(() => btn.classList.remove('press-flash'), 200);
+}
+
 /* ── Button handlers ───────────────────────────────────────────────────── */
 btnArm.addEventListener('click', () => api(armed ? '/api/disarm' : '/api/arm', {}));
 
 btnLockScreen.addEventListener('click', async () => {
+  flashBtn(btnLockScreen);
   const r = await api('/api/lock-screen', {});
   if (r?.ok) showToast('Screen locked', 'success');
 });
 
 btnMouseLock.addEventListener('click', async () => {
+  btnMouseLock.blur();
   const r = await api('/api/lock-mouse', {});
   if (r?.ok) showToast(r.mouse_locked ? 'Mouse locked' : 'Mouse unlocked', 'success');
 });
 
 btnShutdown.addEventListener('click', async () => {
+  flashBtn(btnShutdown);
   if (!confirm('⚠️  Shut down the computer?')) return;
   const r = await api('/api/shutdown', {});
   if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Shutdown in 5 s…' : 'Shutting down…', 'success');
 });
 
 btnRestart.addEventListener('click', async () => {
+  flashBtn(btnRestart);
   if (!confirm('🔄  Restart the computer?')) return;
   const r = await api('/api/restart', {});
   if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Restart in 5 s…' : 'Restarting…', 'success');
 });
 
 /* ── Message dialog ────────────────────────────────────────────────────── */
-btnMessage.addEventListener('click', () => { msgModal.classList.remove('hidden'); msgInput.focus(); });
+btnMessage.addEventListener('click', () => { flashBtn(btnMessage); msgModal.classList.remove('hidden'); msgInput.focus(); });
 document.getElementById('btn-msg-cancel').addEventListener('click', () => msgModal.classList.add('hidden'));
 document.getElementById('btn-msg-send').addEventListener('click', async () => {
   const text = msgInput.value.trim();
@@ -365,7 +376,7 @@ document.getElementById('btn-msg-send').addEventListener('click', async () => {
 });
 
 /* ── Launch app dialog ─────────────────────────────────────────────────── */
-btnLaunch.addEventListener('click', () => { launchModal.classList.remove('hidden'); launchInput.focus(); });
+btnLaunch.addEventListener('click', () => { flashBtn(btnLaunch); launchModal.classList.remove('hidden'); launchInput.focus(); });
 document.getElementById('btn-launch-cancel').addEventListener('click', () => launchModal.classList.add('hidden'));
 document.getElementById('btn-launch-go').addEventListener('click', async () => {
   const path = launchInput.value.trim();
