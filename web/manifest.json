@@ -41,24 +41,21 @@
       "sizes": "1080x2074",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "Main controls",
-      "platform": "android"
+      "label": "Main controls"
     },
     {
       "src": "/icons/screenshot-2.png",
       "sizes": "1080x2072",
       "type": "image/png",
       "form_factor": "narrow",
-      "label": "Alert state",
-      "platform": "android"
+      "label": "Alert state"
     },
     {
       "src": "/icons/screenshot-wide-1.png",
       "sizes": "1920x1080",
       "type": "image/png",
       "form_factor": "wide",
-      "label": "LZRD remote dashboard",
-      "platform": "android"
+      "label": "LZRD remote dashboard"
     }
   ]
 }
