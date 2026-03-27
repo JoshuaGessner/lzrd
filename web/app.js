@@ -7,6 +7,9 @@ let currentPlatform = null;   // set from first SSE event; null = unknown
 let authMode = 'login';       // 'login' | 'setup'
 let reconnectTimer = null;
 let recoveringVisibility = false;
+let pushMaintenanceTimer = null;
+
+const PUSH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
 const authModal     = document.getElementById('auth-modal');
@@ -252,6 +255,13 @@ async function registerPushSubscription(subscription) {
   }
 }
 
+function startPushMaintenance() {
+  if (pushMaintenanceTimer) return;
+  pushMaintenanceTimer = setInterval(() => {
+    enrollPushNotifications(false).catch(() => {});
+  }, PUSH_REFRESH_INTERVAL_MS);
+}
+
 
 
 /* ── SSE connection ────────────────────────────────────────────────────── */
@@ -315,6 +325,7 @@ async function recoverConnectionNow(reason = 'manual') {
       handleEvent({ type: 'state', ...status.data });
     }
     connect();
+    enrollPushNotifications(false).catch(() => {});
   } catch (err) {
     console.warn(`[LZRD] Recover failed (${reason}):`, err);
   } finally {
@@ -438,6 +449,7 @@ async function connectAfterAuth() {
   handleEvent({ type: 'state', ...status.data });
   connect();
   enrollPushNotifications(true).catch(() => {});
+  startPushMaintenance();
 }
 
 async function initAuthFlow() {
@@ -468,6 +480,7 @@ async function initAuthFlow() {
   hideAuthModal();
   connect();
   enrollPushNotifications(true).catch(() => {});
+  startPushMaintenance();
 }
 
 /* ── Button press flash ────────────────────────────────────────────────── */
@@ -567,8 +580,9 @@ function _isStandaloneDisplayMode() {
 
 function _updateInstallButtonVisibility() {
   if (!btnInstall) return;
-  const visible = Boolean(deferredInstallPrompt) && !_isStandaloneDisplayMode();
+  const visible = !_isStandaloneDisplayMode() && window.isSecureContext && ('serviceWorker' in navigator);
   btnInstall.classList.toggle('hidden', !visible);
+  btnInstall.textContent = deferredInstallPrompt ? 'Install App' : 'Install Help';
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -586,16 +600,19 @@ window.addEventListener('appinstalled', () => {
 
 if (btnInstall) {
   btnInstall.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) return;
-    deferredInstallPrompt.prompt();
-    try {
-      const choice = await deferredInstallPrompt.userChoice;
-      console.log('[LZRD] install choice:', choice?.outcome || 'unknown');
-    } catch {
-      // Some browsers do not expose userChoice consistently.
+    if (deferredInstallPrompt) {
+      deferredInstallPrompt.prompt();
+      try {
+        const choice = await deferredInstallPrompt.userChoice;
+        console.log('[LZRD] install choice:', choice?.outcome || 'unknown');
+      } catch {
+        // Some browsers do not expose userChoice consistently.
+      }
+      deferredInstallPrompt = null;
+      _updateInstallButtonVisibility();
+      return;
     }
-    deferredInstallPrompt = null;
-    _updateInstallButtonVisibility();
+    showToast('Use browser menu to install: Chrome menu -> Add to Home screen', 'success');
   });
 }
 
@@ -615,6 +632,7 @@ window.addEventListener('focus', () => {
 
 window.addEventListener('online', () => {
   recoverConnectionNow('online').catch(() => {});
+  enrollPushNotifications(false).catch(() => {});
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
