@@ -40,22 +40,13 @@
       "src": "/icons/screenshot-1.png",
       "sizes": "1080x2074",
       "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Main controls"
+      "form_factor": "narrow"
     },
     {
       "src": "/icons/screenshot-2.png",
       "sizes": "1080x2072",
       "type": "image/png",
-      "form_factor": "narrow",
-      "label": "Alert state"
-    },
-    {
-      "src": "/icons/screenshot-wide-1.png",
-      "sizes": "1920x1080",
-      "type": "image/png",
-      "form_factor": "wide",
-      "label": "LZRD remote dashboard"
+      "form_factor": "narrow"
     }
   ]
 }

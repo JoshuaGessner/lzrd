@@ -242,131 +242,76 @@ def restart_computer() -> None:
 _MB_ICONINFORMATION = 0x40
 _MB_SETFOREGROUND = 0x1000
 
-# Keep push payloads deliverable while devices are offline for extended periods.
-_PUSH_TTL_SECONDS = 60 * 60 * 24 * 28  # 28 days
-
-
-def _show_windows_themed_popup(
-    *,
-    title: str,
-    text: str,
-    accent_hex: str = "#6DBF4A",
-    auto_close_ms: int = 0,
-) -> None:
-    """Render a themed, branded popup on Windows that matches the web UI style."""
-    try:
-        import tkinter as tk
-
-        dialog = tk.Tk()
-        dialog.title(title)
-        dialog.resizable(False, False)
-        dialog.attributes("-topmost", True)
-        dialog.configure(bg="#1a1a1a")
-
-        try:
-            icon_image = tk.PhotoImage(file=str(TRAY_ICON_FILE))
-            dialog.iconphoto(True, icon_image)
-            dialog._lzrd_icon_image = icon_image  # type: ignore[attr-defined]
-        except Exception:
-            pass
-
-        card = tk.Frame(dialog, bg="#252525", bd=1, relief="solid")
-        card.pack(fill="both", expand=True, padx=14, pady=14)
-
-        header = tk.Frame(card, bg="#252525")
-        header.pack(fill="x", padx=14, pady=(12, 6))
-        tk.Label(
-            header,
-            text="LZRD",
-            bg="#252525",
-            fg=accent_hex,
-            font=("Segoe UI", 10, "bold"),
-        ).pack(side="left")
-        tk.Label(
-            header,
-            text=title,
-            bg="#252525",
-            fg="#E8E8E8",
-            font=("Segoe UI", 10, "bold"),
-        ).pack(side="left", padx=(8, 0))
-
-        tk.Frame(card, bg=accent_hex, height=2).pack(fill="x", padx=14, pady=(0, 10))
-
-        body = tk.Label(
-            card,
-            text=text,
-            justify="left",
-            anchor="w",
-            wraplength=460,
-            bg="#252525",
-            fg="#E8E8E8",
-            padx=14,
-            pady=6,
-            font=("Segoe UI", 10),
-        )
-        body.pack(fill="x")
-
-        footer = tk.Frame(card, bg="#252525")
-        footer.pack(fill="x", padx=14, pady=(12, 12))
-
-        def _close_dialog() -> None:
-            try:
-                dialog.destroy()
-            finally:
-                pass
-
-        ok_btn = tk.Button(
-            footer,
-            text="OK",
-            command=_close_dialog,
-            bg=accent_hex,
-            fg="#111111",
-            activebackground=accent_hex,
-            activeforeground="#111111",
-            bd=0,
-            padx=18,
-            pady=6,
-            font=("Segoe UI", 9, "bold"),
-            cursor="hand2",
-        )
-        ok_btn.pack(side="right")
-
-        dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
-
-        dialog.update_idletasks()
-        width = max(dialog.winfo_width(), 420)
-        height = dialog.winfo_height()
-        x = max((dialog.winfo_screenwidth() - width) // 2, 0)
-        y = max((dialog.winfo_screenheight() - height) // 2, 0)
-        dialog.geometry(f"{width}x{height}+{x}+{y}")
-
-        dialog.deiconify()
-        dialog.lift()
-        dialog.focus_force()
-        ok_btn.focus_set()
-
-        if auto_close_ms > 0:
-            dialog.after(auto_close_ms, _close_dialog)
-
-        dialog.mainloop()
-    except Exception:
-        ctypes.windll.user32.MessageBoxW(
-            None, text, title, _MB_ICONINFORMATION | _MB_SETFOREGROUND
-        )
-    finally:
-        if _lzrd and _lzrd.mouse_locked:
-            lock_mouse_cursor()
-
 
 def display_message(text: str) -> None:
     """Display a notification message to the user (non-blocking)."""
     if PLATFORM == "Windows":
-        threading.Thread(
-            target=_show_windows_themed_popup,
-            kwargs={"title": "Message", "text": text, "accent_hex": "#58A6FF"},
-            daemon=True,
-            name="lzrd-msgbox",
-        ).start()
+        def _show() -> None:
+            try:
+                import tkinter as tk
+
+                root = tk.Tk()
+                root.withdraw()
+
+                dialog = tk.Toplevel(root)
+                dialog.title("LZRD Message")
+                dialog.resizable(False, False)
+                dialog.attributes("-topmost", True)
+
+                try:
+                    icon_image = tk.PhotoImage(file=str(TRAY_ICON_FILE))
+                    root.iconphoto(True, icon_image)
+                    dialog.iconphoto(True, icon_image)
+                    # Keep a reference so tkinter does not garbage-collect the image.
+                    dialog._lzrd_icon_image = icon_image  # type: ignore[attr-defined]
+                except Exception:
+                    pass
+
+                container = tk.Frame(dialog, padx=14, pady=12)
+                container.pack(fill="both", expand=True)
+
+                label = tk.Label(
+                    container,
+                    text=text,
+                    justify="left",
+                    anchor="w",
+                    wraplength=420,
+                )
+                label.pack(fill="x", expand=True)
+
+                def _close_dialog() -> None:
+                    try:
+                        dialog.destroy()
+                    finally:
+                        root.quit()
+
+                btn = tk.Button(container, text="OK", width=10, command=_close_dialog)
+                btn.pack(pady=(12, 0))
+                dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
+
+                dialog.update_idletasks()
+                width = dialog.winfo_width()
+                height = dialog.winfo_height()
+                x = max((dialog.winfo_screenwidth() - width) // 2, 0)
+                y = max((dialog.winfo_screenheight() - height) // 2, 0)
+                dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+                dialog.deiconify()
+                dialog.lift()
+                dialog.focus_force()
+                btn.focus_set()
+
+                root.mainloop()
+                root.destroy()
+            except Exception:
+                ctypes.windll.user32.MessageBoxW(
+                    None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
+                )
+            finally:
+                # Message dialogs may steal foreground/focus, which can release
+                # ClipCursor. Re-apply confinement when still logically locked.
+                if _lzrd and _lzrd.mouse_locked:
+                    lock_mouse_cursor()
     else:
         def _show() -> None:
             for cmd in [
@@ -382,35 +327,7 @@ def display_message(text: str) -> None:
                     continue
             print(f"[LZRD] Message: {text}")
 
-        threading.Thread(target=_show, daemon=True, name="lzrd-msgbox").start()
-
-
-def display_launch_popup(path: str, success: bool, error_message: str = "") -> None:
-    """Display a themed launch-status popup on Windows."""
-    if PLATFORM != "Windows":
-        return
-    if success:
-        title = "Launch"
-        body = f"Application launch requested:\n{path}"
-        accent = "#6DBF4A"
-        auto_close_ms = 4500
-    else:
-        title = "Launch Failed"
-        detail = f"\n\nDetails: {error_message}" if error_message else ""
-        body = f"Could not launch:\n{path}{detail}"
-        accent = "#E05040"
-        auto_close_ms = 0
-    threading.Thread(
-        target=_show_windows_themed_popup,
-        kwargs={
-            "title": title,
-            "text": body,
-            "accent_hex": accent,
-            "auto_close_ms": auto_close_ms,
-        },
-        daemon=True,
-        name="lzrd-launch-popup",
-    ).start()
+    threading.Thread(target=_show, daemon=True, name="lzrd-msgbox").start()
 
 
 def launch_app(path: str) -> None:
@@ -460,7 +377,6 @@ _push_subscriptions: dict[str, dict] = {}  # subscription_id -> {endpoint, keys,
 _push_subscriptions_lock = threading.Lock()
 _push_file = Path.home() / ".lzrd_push_subscriptions.json"
 _known_dead_push_subscriptions: set[str] = set()
-_push_send_lock = threading.Lock()
 
 _vapid_public_key: str = ""
 _vapid_private_key: str = ""
@@ -564,75 +480,44 @@ def _send_push_notification(title: str, body: str) -> None:
     if not _vapid_public_key or not _vapid_private_key or not _vapid_claim_email:
         return
     
-    with _push_send_lock:
-        invalid_subs: set[str] = set()
-        unexpected_failures: dict[str, int] = {}
-        unexpected_examples: list[str] = []
+    invalid_subs: set[str] = set()
+    with _push_subscriptions_lock:
+        subs = [
+            (sub_id, sub_data)
+            for sub_id, sub_data in _push_subscriptions.items()
+            if sub_id not in _known_dead_push_subscriptions
+        ]
+    
+    for sub_id, sub_data in subs:
+        try:
+            webpush(
+                subscription_info=sub_data,
+                data=json.dumps({
+                    "type": "alert",
+                    "title": title,
+                    "body": body,
+                    "icon": "/icons/icon-192.png",
+                    "badge": "/badge-icon.png"
+                }),
+                vapid_private_key=_vapid_private_key,
+                vapid_claims={"sub": f"mailto:{_vapid_claim_email}"}
+            )
+        except WebPushException as e:
+            status_code = e.response.status_code if e.response else None
+            if status_code == 410:
+                invalid_subs.add(sub_id)
+            else:
+                print(f"[LZRD] Push notification failed for {sub_id}: {e}")
+        except Exception as e:
+            print(f"[LZRD] Push notification error for {sub_id}: {e}")
+    
+    if invalid_subs:
         with _push_subscriptions_lock:
-            subs = [
-                (sub_id, sub_data)
-                for sub_id, sub_data in _push_subscriptions.items()
-                if sub_id not in _known_dead_push_subscriptions
-            ]
-
-        for sub_id, sub_data in subs:
-            try:
-                webpush(
-                    subscription_info=sub_data,
-                    data=json.dumps({
-                        "type": "alert",
-                        "title": title,
-                        "body": body,
-                        "icon": "/icons/icon-192.png",
-                        "badge": "/badge-icon.png"
-                    }),
-                    vapid_private_key=_vapid_private_key,
-                    vapid_claims={"sub": f"mailto:{_vapid_claim_email}"},
-                    ttl=_PUSH_TTL_SECONDS,
-                )
-            except WebPushException as e:
-                status_code = e.response.status_code if e.response else None
-                response_text = ""
-                try:
-                    response_text = (e.response.text or "").lower() if e.response else ""
-                except Exception:
-                    response_text = ""
-                err_text = str(e).lower()
-                vapid_mismatch = (
-                    status_code == 403 and (
-                        "vapid credentials" in response_text
-                        or "vapid credentials" in err_text
-                        or "do not correspond" in response_text
-                        or "do not correspond" in err_text
-                    )
-                )
-
-                if status_code in {404, 410} or vapid_mismatch:
-                    invalid_subs.add(sub_id)
-                else:
-                    key = f"webpush:{status_code if status_code is not None else 'unknown'}"
-                    unexpected_failures[key] = unexpected_failures.get(key, 0) + 1
-                    if len(unexpected_examples) < 3:
-                        unexpected_examples.append(f"{sub_id} -> {e}")
-            except Exception as e:
-                key = "error"
-                unexpected_failures[key] = unexpected_failures.get(key, 0) + 1
-                if len(unexpected_examples) < 3:
-                    unexpected_examples.append(f"{sub_id} -> {e}")
-
-        if invalid_subs:
-            with _push_subscriptions_lock:
-                for sub_id in invalid_subs:
-                    _known_dead_push_subscriptions.add(sub_id)
-                    _push_subscriptions.pop(sub_id, None)
-            _save_push_subscriptions()
-            print(f"[LZRD] Removed {len(invalid_subs)} stale push subscription(s).")
-
-        if unexpected_failures:
-            summary = ", ".join(f"{k}={v}" for k, v in sorted(unexpected_failures.items()))
-            print(f"[LZRD] Push send had {sum(unexpected_failures.values())} unexpected failure(s): {summary}")
-            for example in unexpected_examples:
-                print(f"[LZRD] Push failure example: {example}")
+            for sub_id in invalid_subs:
+                _known_dead_push_subscriptions.add(sub_id)
+                _push_subscriptions.pop(sub_id, None)
+        _save_push_subscriptions()
+        print(f"[LZRD] Removed {len(invalid_subs)} expired push subscription(s).")
 
 
 def _build_notification_badge_png() -> bytes:
@@ -640,52 +525,13 @@ def _build_notification_badge_png() -> bytes:
     size = (96, 96)
     source = _load_tray_icon_image(armed=True).convert("RGBA").resize(size)
 
-    bg_r, bg_g, bg_b, _ = source.getpixel((0, 0))
-    raw_mask = Image.new("L", size, 0)
-    src_px = source.load()
-    mask_px = raw_mask.load()
-
-    for y in range(size[1]):
-        for x in range(size[0]):
-            r, g, b, a = src_px[x, y]
-            if a < 8:
-                continue
-            color_distance = abs(r - bg_r) + abs(g - bg_g) + abs(b - bg_b)
-            # Keep the lizard silhouette while discarding the rounded-square background.
-            if color_distance > 80 and g >= r + 12 and g >= b + 12:
-                mask_px[x, y] = 255
-
-    if raw_mask.getbbox() is None:
-        # Fallback to any highly non-background pixel.
-        for y in range(size[1]):
-            for x in range(size[0]):
-                r, g, b, a = src_px[x, y]
-                if a < 8:
-                    continue
-                color_distance = abs(r - bg_r) + abs(g - bg_g) + abs(b - bg_b)
-                if color_distance > 100:
-                    mask_px[x, y] = 255
-
-    bbox = raw_mask.getbbox()
-    glyph_mask = Image.new("L", size, 0)
-    if bbox is not None:
-        glyph = raw_mask.crop(bbox)
-        max_glyph_size = 70
-        try:
-            resampling = Image.Resampling.LANCZOS
-        except AttributeError:
-            resampling = Image.LANCZOS
-        scale = min(max_glyph_size / glyph.width, max_glyph_size / glyph.height)
-        resized = glyph.resize(
-            (max(1, int(glyph.width * scale)), max(1, int(glyph.height * scale))),
-            resampling,
-        )
-        x = (size[0] - resized.width) // 2
-        y = (size[1] - resized.height) // 2
-        glyph_mask.paste(resized, (x, y))
+    alpha = source.getchannel("A")
+    if alpha.getbbox() is None:
+        source = _make_icon_image(armed=True).convert("RGBA").resize(size)
+        alpha = source.getchannel("A")
 
     badge = Image.new("RGBA", size, (255, 255, 255, 0))
-    badge.putalpha(glyph_mask)
+    badge.putalpha(alpha)
 
     buf = io.BytesIO()
     badge.save(buf, format="PNG")
@@ -1262,10 +1108,8 @@ def api_launch():
         return jsonify({"error": "path too long"}), 400
     try:
         launch_app(path)
-    except Exception as exc:
-        display_launch_popup(path, success=False, error_message=str(exc))
+    except Exception:
         return jsonify({"error": "could not launch application"}), 400
-    display_launch_popup(path, success=True)
     return jsonify({"ok": True})
 
 

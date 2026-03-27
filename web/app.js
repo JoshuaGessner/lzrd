@@ -7,9 +7,6 @@ let currentPlatform = null;   // set from first SSE event; null = unknown
 let authMode = 'login';       // 'login' | 'setup'
 let reconnectTimer = null;
 let recoveringVisibility = false;
-let pushMaintenanceTimer = null;
-
-const PUSH_REFRESH_INTERVAL_MS = 6 * 60 * 60 * 1000;
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
 const authModal     = document.getElementById('auth-modal');
@@ -255,13 +252,6 @@ async function registerPushSubscription(subscription) {
   }
 }
 
-function startPushMaintenance() {
-  if (pushMaintenanceTimer) return;
-  pushMaintenanceTimer = setInterval(() => {
-    enrollPushNotifications(false).catch(() => {});
-  }, PUSH_REFRESH_INTERVAL_MS);
-}
-
 
 
 /* ── SSE connection ────────────────────────────────────────────────────── */
@@ -325,7 +315,6 @@ async function recoverConnectionNow(reason = 'manual') {
       handleEvent({ type: 'state', ...status.data });
     }
     connect();
-    enrollPushNotifications(false).catch(() => {});
   } catch (err) {
     console.warn(`[LZRD] Recover failed (${reason}):`, err);
   } finally {
@@ -449,7 +438,6 @@ async function connectAfterAuth() {
   handleEvent({ type: 'state', ...status.data });
   connect();
   enrollPushNotifications(true).catch(() => {});
-  startPushMaintenance();
 }
 
 async function initAuthFlow() {
@@ -480,7 +468,6 @@ async function initAuthFlow() {
   hideAuthModal();
   connect();
   enrollPushNotifications(true).catch(() => {});
-  startPushMaintenance();
 }
 
 /* ── Button press flash ────────────────────────────────────────────────── */
@@ -551,16 +538,6 @@ function showToast(msg, type = '') {
   setTimeout(() => { el.classList.remove('visible'); setTimeout(() => el.remove(), 300); }, 2500);
 }
 
-function _logInstallReadiness(reason) {
-  console.log('[LZRD] install readiness', {
-    reason,
-    secure: window.isSecureContext,
-    standalone: _isStandaloneDisplayMode(),
-    hasDeferredPrompt: Boolean(deferredInstallPrompt),
-    swController: Boolean(navigator.serviceWorker && navigator.serviceWorker.controller),
-  });
-}
-
 /* ── Service worker ────────────────────────────────────────────────────── */
 const _swPageLoadTime = Date.now();
 if ('serviceWorker' in navigator) {
@@ -579,18 +556,6 @@ if ('serviceWorker' in navigator) {
     console.log('[LZRD] Service worker ready:', reg.scope);
     reg.update().catch(() => {});
     setInterval(() => reg.update().catch(() => {}), 60 * 1000);
-
-    // If this page is not yet controlled by a SW, trigger a one-time warmup
-    // reload to make installability checks available sooner.
-    if (!navigator.serviceWorker.controller) {
-      const warmupFlag = 'lzrd_sw_warmup_reload_done';
-      if (!sessionStorage.getItem(warmupFlag)) {
-        sessionStorage.setItem(warmupFlag, '1');
-        setTimeout(() => window.location.reload(), 300);
-      }
-    } else {
-      sessionStorage.removeItem('lzrd_sw_warmup_reload_done');
-    }
   }).catch(err => {
     console.warn('[LZRD] Service worker registration failed:', err);
   });
@@ -602,37 +567,26 @@ function _isStandaloneDisplayMode() {
 
 function _updateInstallButtonVisibility() {
   if (!btnInstall) return;
-  const visible = !_isStandaloneDisplayMode() && window.isSecureContext && ('serviceWorker' in navigator);
+  const visible = Boolean(deferredInstallPrompt) && !_isStandaloneDisplayMode();
   btnInstall.classList.toggle('hidden', !visible);
-  btnInstall.textContent = 'Install App';
-  btnInstall.disabled = !deferredInstallPrompt;
-  btnInstall.title = deferredInstallPrompt
-    ? 'Install LZRD app'
-    : 'Install not ready yet - keep the page open briefly and interact once';
 }
 
 window.addEventListener('beforeinstallprompt', (e) => {
   e.preventDefault();
   deferredInstallPrompt = e;
   _updateInstallButtonVisibility();
-  _logInstallReadiness('beforeinstallprompt');
   console.log('[LZRD] beforeinstallprompt fired');
 });
 
 window.addEventListener('appinstalled', () => {
   deferredInstallPrompt = null;
   _updateInstallButtonVisibility();
-  _logInstallReadiness('appinstalled');
   console.log('[LZRD] appinstalled fired');
 });
 
 if (btnInstall) {
   btnInstall.addEventListener('click', async () => {
-    if (!deferredInstallPrompt) {
-      _logInstallReadiness('install-click-not-ready');
-      showToast('Install is not ready yet. Stay on this page for a bit and tap once, then retry.', 'error');
-      return;
-    }
+    if (!deferredInstallPrompt) return;
     deferredInstallPrompt.prompt();
     try {
       const choice = await deferredInstallPrompt.userChoice;
@@ -653,20 +607,16 @@ document.addEventListener('visibilitychange', async () => {
 
 window.addEventListener('pageshow', () => {
   recoverConnectionNow('pageshow').catch(() => {});
-  _updateInstallButtonVisibility();
 });
 
 window.addEventListener('focus', () => {
   recoverConnectionNow('focus').catch(() => {});
-  _updateInstallButtonVisibility();
 });
 
 window.addEventListener('online', () => {
   recoverConnectionNow('online').catch(() => {});
-  enrollPushNotifications(false).catch(() => {});
 });
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
 _updateInstallButtonVisibility();
-_logInstallReadiness('init');
 initAuthFlow();
