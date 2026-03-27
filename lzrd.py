@@ -547,12 +547,25 @@ def _load_push_subscriptions() -> None:
 
 
 def _save_push_subscriptions() -> None:
-    """Persist push subscriptions to file."""
+    """Persist push subscriptions to file (atomic write)."""
     try:
         with _push_subscriptions_lock:
             snapshot = dict(_push_subscriptions)
-        with _push_file.open('w') as f:
-            json.dump({'subscriptions': snapshot}, f)
+        fd = tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", suffix=".tmp",
+            dir=_push_file.parent, delete=False,
+        )
+        try:
+            json.dump({"subscriptions": snapshot}, fd)
+            fd.close()
+            os.replace(fd.name, _push_file)
+        except BaseException:
+            fd.close()
+            try:
+                os.unlink(fd.name)
+            except OSError:
+                pass
+            raise
     except Exception as e:
         print(f"[LZRD] Warning: could not save push subscriptions: {e}")
 
@@ -563,6 +576,7 @@ _PUSH_TTL_SECONDS = 60 * 60 * 24 * 2  # 48 hours
 def _send_push_notification(title: str, body: str) -> None:
     """Send a push notification to all subscribed clients."""
     if not _vapid_public_key or not _vapid_private_key or not _vapid_claim_email:
+        print("[LZRD] Push skipped: VAPID not configured.")
         return
     
     invalid_subs: set[str] = set()
@@ -572,6 +586,12 @@ def _send_push_notification(title: str, body: str) -> None:
             for sub_id, sub_data in _push_subscriptions.items()
             if sub_id not in _known_dead_push_subscriptions
         ]
+
+    if not subs:
+        print("[LZRD] Push skipped: no active subscriptions.")
+        return
+
+    print(f"[LZRD] Sending push to {len(subs)} subscription(s)…")
     
     for sub_id, sub_data in subs:
         try:

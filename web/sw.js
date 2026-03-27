@@ -1,4 +1,4 @@
-const CACHE = 'lzrd-app-v8';
+const CACHE = 'lzrd-app-v9';
 const SHELL = [
   '/',
   '/style.css',

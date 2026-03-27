@@ -207,19 +207,8 @@ async function _doEnrollPush(forceSubscribe = false) {
 
   try {
     const reg = await navigator.serviceWorker.ready;
-    const sub = await reg.pushManager.getSubscription();
-    if (sub) {
-      pushSubscription = sub;
-      pushEnabled = true;
-      await registerPushSubscription(sub);
-      console.log('[LZRD] Push already enrolled');
-      return;
-    }
 
-    if (Notification.permission !== 'granted' && !forceSubscribe) {
-      return;
-    }
-
+    // Always fetch current VAPID key so we can detect server-side rotation.
     const statusRes = await fetch('/api/push/status', { credentials: 'same-origin' });
     if (!statusRes.ok) {
       console.warn('[LZRD] Push status probe failed:', statusRes.status);
@@ -231,18 +220,44 @@ async function _doEnrollPush(forceSubscribe = false) {
       return;
     }
 
-    try {
-      const urlBase64ToUint8Array = (base64String) => {
-        const padding = '='.repeat((4 - base64String.length % 4) % 4);
-        const base64 = (base64String + padding)
-          .replace(/\-/g, '+')
-          .replace(/_/g, '/');
-        return new Uint8Array(atob(base64).split('').map(c => c.charCodeAt(0)));
-      };
+    const urlBase64ToUint8Array = (base64String) => {
+      const padding = '='.repeat((4 - base64String.length % 4) % 4);
+      const base64 = (base64String + padding)
+        .replace(/\-/g, '+')
+        .replace(/_/g, '/');
+      return new Uint8Array(atob(base64).split('').map(c => c.charCodeAt(0)));
+    };
+    const serverKeyBytes = urlBase64ToUint8Array(statusData.vapid_public_key);
 
+    const existingSub = await reg.pushManager.getSubscription();
+    if (existingSub) {
+      // Compare the subscription's applicationServerKey with the server's current key.
+      const subKey = existingSub.options && existingSub.options.applicationServerKey
+        ? new Uint8Array(existingSub.options.applicationServerKey) : null;
+      const keysMatch = subKey && subKey.length === serverKeyBytes.length &&
+        subKey.every((b, i) => b === serverKeyBytes[i]);
+
+      if (keysMatch) {
+        pushSubscription = existingSub;
+        pushEnabled = true;
+        await registerPushSubscription(existingSub);
+        console.log('[LZRD] Push already enrolled (key matches)');
+        return;
+      }
+
+      // VAPID key changed — old subscription is useless.
+      console.warn('[LZRD] VAPID key mismatch — re-subscribing');
+      await existingSub.unsubscribe();
+    }
+
+    if (Notification.permission !== 'granted' && !forceSubscribe) {
+      return;
+    }
+
+    try {
       const sub = await reg.pushManager.subscribe({
         userVisibleOnly: true,
-        applicationServerKey: urlBase64ToUint8Array(statusData.vapid_public_key)
+        applicationServerKey: serverKeyBytes
       });
       pushSubscription = sub;
       pushEnabled = true;
