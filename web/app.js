@@ -267,7 +267,12 @@ async function api(path, body) {
       showToast('Too many requests. Please wait a moment.', 'error');
       return null;
     }
-    return res.json();
+    const data = await res.json();
+    if (!res.ok) {
+      showToast(data.error || 'Request failed', 'error');
+      return null;
+    }
+    return data;
   } catch (err) {
     showToast('Network error', 'error');
     return null;

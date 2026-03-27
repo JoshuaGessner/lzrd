@@ -275,7 +275,7 @@ def launch_app(path: str) -> None:
     ``shell=False`` is used to prevent shell injection attacks.
     """
     try:
-        args = shlex.split(path, posix=(PLATFORM != "Windows"))
+        args = shlex.split(path)
     except ValueError:
         args = [path]
     subprocess.Popen(args, shell=False)
@@ -763,7 +763,10 @@ def api_launch():
         return jsonify({"error": "path is required"}), 400
     if len(path) > _MAX_PATH_LEN:
         return jsonify({"error": "path too long"}), 400
-    launch_app(path)
+    try:
+        launch_app(path)
+    except Exception:
+        return jsonify({"error": "could not launch application"}), 400
     return jsonify({"ok": True})
 
 
