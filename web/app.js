@@ -25,6 +25,11 @@ const statusSub     = document.getElementById('status-sublabel');
 const connDot       = document.getElementById('conn-dot');
 const connText      = document.getElementById('conn-text');
 const btnMouseLock  = document.getElementById('btn-mouse-lock');
+const btnLockScreen = document.getElementById('btn-lock-screen');
+const btnShutdown   = document.getElementById('btn-shutdown');
+const btnRestart    = document.getElementById('btn-restart');
+const btnMessage    = document.getElementById('btn-message');
+const btnLaunch     = document.getElementById('btn-launch');
 const msgModal      = document.getElementById('msg-modal');
 const msgInput      = document.getElementById('msg-input');
 const launchModal   = document.getElementById('launch-modal');
@@ -325,30 +330,30 @@ async function initAuthFlow() {
 /* ── Button handlers ───────────────────────────────────────────────────── */
 btnArm.addEventListener('click', () => api(armed ? '/api/disarm' : '/api/arm', {}));
 
-async function lockScreen() {
+btnLockScreen.addEventListener('click', async () => {
   const r = await api('/api/lock-screen', {});
   if (r?.ok) showToast('Screen locked', 'success');
-}
+});
 
-async function toggleMouseLock() {
+btnMouseLock.addEventListener('click', async () => {
   const r = await api('/api/lock-mouse', {});
   if (r?.ok) showToast(r.mouse_locked ? 'Mouse locked' : 'Mouse unlocked', 'success');
-}
+});
 
-async function confirmShutdown() {
+btnShutdown.addEventListener('click', async () => {
   if (!confirm('⚠️  Shut down the computer?')) return;
   const r = await api('/api/shutdown', {});
   if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Shutdown in 5 s…' : 'Shutting down…', 'success');
-}
+});
 
-async function confirmRestart() {
+btnRestart.addEventListener('click', async () => {
   if (!confirm('🔄  Restart the computer?')) return;
   const r = await api('/api/restart', {});
   if (r?.ok) showToast(currentPlatform === 'Windows' ? 'Restart in 5 s…' : 'Restarting…', 'success');
-}
+});
 
 /* ── Message dialog ────────────────────────────────────────────────────── */
-function showMessageDialog() { msgModal.classList.remove('hidden'); msgInput.focus(); }
+btnMessage.addEventListener('click', () => { msgModal.classList.remove('hidden'); msgInput.focus(); });
 document.getElementById('btn-msg-cancel').addEventListener('click', () => msgModal.classList.add('hidden'));
 document.getElementById('btn-msg-send').addEventListener('click', async () => {
   const text = msgInput.value.trim();
@@ -360,7 +365,7 @@ document.getElementById('btn-msg-send').addEventListener('click', async () => {
 });
 
 /* ── Launch app dialog ─────────────────────────────────────────────────── */
-function showLaunchDialog() { launchModal.classList.remove('hidden'); launchInput.focus(); }
+btnLaunch.addEventListener('click', () => { launchModal.classList.remove('hidden'); launchInput.focus(); });
 document.getElementById('btn-launch-cancel').addEventListener('click', () => launchModal.classList.add('hidden'));
 document.getElementById('btn-launch-go').addEventListener('click', async () => {
   const path = launchInput.value.trim();
