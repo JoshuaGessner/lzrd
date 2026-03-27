@@ -566,6 +566,8 @@ def _send_push_notification(title: str, body: str) -> None:
     
     with _push_send_lock:
         invalid_subs: set[str] = set()
+        unexpected_failures: dict[str, int] = {}
+        unexpected_examples: list[str] = []
         with _push_subscriptions_lock:
             subs = [
                 (sub_id, sub_data)
@@ -590,12 +592,33 @@ def _send_push_notification(title: str, body: str) -> None:
                 )
             except WebPushException as e:
                 status_code = e.response.status_code if e.response else None
-                if status_code in {404, 410}:
+                response_text = ""
+                try:
+                    response_text = (e.response.text or "").lower() if e.response else ""
+                except Exception:
+                    response_text = ""
+                err_text = str(e).lower()
+                vapid_mismatch = (
+                    status_code == 403 and (
+                        "vapid credentials" in response_text
+                        or "vapid credentials" in err_text
+                        or "do not correspond" in response_text
+                        or "do not correspond" in err_text
+                    )
+                )
+
+                if status_code in {404, 410} or vapid_mismatch:
                     invalid_subs.add(sub_id)
                 else:
-                    print(f"[LZRD] Push notification failed for {sub_id}: {e}")
+                    key = f"webpush:{status_code if status_code is not None else 'unknown'}"
+                    unexpected_failures[key] = unexpected_failures.get(key, 0) + 1
+                    if len(unexpected_examples) < 3:
+                        unexpected_examples.append(f"{sub_id} -> {e}")
             except Exception as e:
-                print(f"[LZRD] Push notification error for {sub_id}: {e}")
+                key = "error"
+                unexpected_failures[key] = unexpected_failures.get(key, 0) + 1
+                if len(unexpected_examples) < 3:
+                    unexpected_examples.append(f"{sub_id} -> {e}")
 
         if invalid_subs:
             with _push_subscriptions_lock:
@@ -603,7 +626,13 @@ def _send_push_notification(title: str, body: str) -> None:
                     _known_dead_push_subscriptions.add(sub_id)
                     _push_subscriptions.pop(sub_id, None)
             _save_push_subscriptions()
-            print(f"[LZRD] Removed {len(invalid_subs)} expired push subscription(s).")
+            print(f"[LZRD] Removed {len(invalid_subs)} stale push subscription(s).")
+
+        if unexpected_failures:
+            summary = ", ".join(f"{k}={v}" for k, v in sorted(unexpected_failures.items()))
+            print(f"[LZRD] Push send had {sum(unexpected_failures.values())} unexpected failure(s): {summary}")
+            for example in unexpected_examples:
+                print(f"[LZRD] Push failure example: {example}")
 
 
 def _build_notification_badge_png() -> bytes:
