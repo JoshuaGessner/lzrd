@@ -7,6 +7,7 @@ let currentPlatform = null;   // set from first SSE event; null = unknown
 let authMode = 'login';       // 'login' | 'setup'
 let reconnectTimer = null;
 let recoveringVisibility = false;
+let _reconnectDebounceTimer = null;
 
 /* ── DOM refs ──────────────────────────────────────────────────────────── */
 const authModal     = document.getElementById('auth-modal');
@@ -173,8 +174,15 @@ authSetupToken.addEventListener('keydown', e => { if (e.key === 'Enter') submitA
 /* ── Push notification enrollment ──────────────────────────────────────── */
 let pushEnabled = false;
 let pushSubscription = null;
+let _enrollingPush = false;
 
 async function enrollPushNotifications(forceSubscribe = false) {
+  if (_enrollingPush) return;
+  _enrollingPush = true;
+  try { await _doEnrollPush(forceSubscribe); } finally { _enrollingPush = false; }
+}
+
+async function _doEnrollPush(forceSubscribe = false) {
   if (!('serviceWorker' in navigator) || !('PushManager' in window)) {
     console.log('[LZRD] Push notifications not supported');
     return;
@@ -238,6 +246,7 @@ async function enrollPushNotifications(forceSubscribe = false) {
     console.warn('[LZRD] Push enrollment error:', e);
   }
 }
+
 
 async function registerPushSubscription(subscription) {
   try {
@@ -331,16 +340,21 @@ function setConn(state) {
 function handleEvent(data) {
   if (data.type === 'alert') {
     if (navigator.vibrate) navigator.vibrate([200, 100, 200]);
-    if ('Notification' in window && Notification.permission === 'granted') {
-      try {
-        new Notification('LZRD Alert', {
-          body: 'Movement detected!',
-          icon: '/icons/icon-192.png',
-          badge: '/badge-icon.png',
-          tag: 'lzrd-alert'
-        });
-      } catch (err) {
-        console.warn('[LZRD] Notification failed:', err);
+    // Only show an in-page Notification when the tab is not focused —
+    // push notifications already cover the background case, and showing
+    // both when the app is open is redundant.
+    if (document.visibilityState !== 'visible' || document.hidden) {
+      if ('Notification' in window && Notification.permission === 'granted') {
+        try {
+          new Notification('LZRD Alert', {
+            body: 'Movement detected!',
+            icon: '/icons/icon-192.png',
+            badge: '/badge-icon.png',
+            tag: 'lzrd-alert'
+          });
+        } catch (err) {
+          console.warn('[LZRD] Notification failed:', err);
+        }
       }
     }
   }
@@ -539,15 +553,20 @@ function showToast(msg, type = '') {
 }
 
 /* ── Service worker ────────────────────────────────────────────────────── */
-const _swPageLoadTime = Date.now();
 if ('serviceWorker' in navigator) {
+  const _hadController = Boolean(navigator.serviceWorker.controller);
+
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if (window.__lzrdSwRefreshing) return;
-    // Suppress reload if controller changed within the first 5 s of page load —
-    // this is the SW activating on first install, not a genuine update. Reloading
-    // here races with the browser's PWA install-criteria check and kills the
-    // beforeinstallprompt event.
-    if (Date.now() - _swPageLoadTime < 5000) return;
+    if (!_hadController) {
+      // First-ever SW activation: the page was uncontrolled. Reload once
+      // so the browser recognises the page as SW-controlled and can fire
+      // beforeinstallprompt promptly.
+      window.__lzrdSwRefreshing = true;
+      window.location.reload();
+      return;
+    }
+    // Genuine update (new SW version activated). Reload to pick up new assets.
     window.__lzrdSwRefreshing = true;
     window.location.reload();
   });
@@ -555,7 +574,7 @@ if ('serviceWorker' in navigator) {
   navigator.serviceWorker.register('/sw.js').then(reg => {
     console.log('[LZRD] Service worker ready:', reg.scope);
     reg.update().catch(() => {});
-    setInterval(() => reg.update().catch(() => {}), 60 * 1000);
+    setInterval(() => reg.update().catch(() => {}), 5 * 60 * 1000);
   }).catch(err => {
     console.warn('[LZRD] Service worker registration failed:', err);
   });
@@ -599,23 +618,23 @@ if (btnInstall) {
   });
 }
 
-/* ── Visibility restore ────────────────────────────────────────────────── */
-document.addEventListener('visibilitychange', async () => {
+/* ── Visibility restore (debounced) ────────────────────────────────────── */
+function _debouncedRecover(reason) {
+  if (_reconnectDebounceTimer) clearTimeout(_reconnectDebounceTimer);
+  _reconnectDebounceTimer = setTimeout(() => {
+    _reconnectDebounceTimer = null;
+    recoverConnectionNow(reason).catch(() => {});
+  }, 300);
+}
+
+document.addEventListener('visibilitychange', () => {
   if (document.visibilityState !== 'visible') return;
-  recoverConnectionNow('visibility').catch(() => {});
+  _debouncedRecover('visibility');
 });
 
-window.addEventListener('pageshow', () => {
-  recoverConnectionNow('pageshow').catch(() => {});
-});
-
-window.addEventListener('focus', () => {
-  recoverConnectionNow('focus').catch(() => {});
-});
-
-window.addEventListener('online', () => {
-  recoverConnectionNow('online').catch(() => {});
-});
+window.addEventListener('pageshow', () => _debouncedRecover('pageshow'));
+window.addEventListener('focus', () => _debouncedRecover('focus'));
+window.addEventListener('online', () => _debouncedRecover('online'));
 
 /* ── Init ──────────────────────────────────────────────────────────────── */
 _updateInstallButtonVisibility();

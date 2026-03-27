@@ -23,6 +23,7 @@ Usage:
   4. Right-click the system-tray icon and choose "Arm", or use the web UI.
 """
 
+import argparse
 import configparser
 import ctypes
 import base64
@@ -31,12 +32,14 @@ import hmac
 import io
 import json
 import logging
+import os
 import platform
 import queue
 import secrets
 import shlex
 import socket
 import subprocess
+import sys
 import threading
 import time
 from collections.abc import Callable
@@ -109,8 +112,18 @@ def _make_icon_image(armed: bool) -> Image.Image:
     return img
 
 
-def _load_tray_icon_image(armed: bool) -> Image.Image:
-    """Load the tray icon from the committed asset file, with a code-drawn fallback."""
+# Pre-built tray icon cache: populated once at startup by _cache_tray_icons().
+_tray_icon_cache: dict[bool, Image.Image] = {}
+
+
+def _cache_tray_icons() -> None:
+    """Build and cache the armed/disarmed tray icons so disk I/O happens once."""
+    for state in (True, False):
+        _tray_icon_cache[state] = _build_tray_icon_image(state)
+
+
+def _build_tray_icon_image(armed: bool) -> Image.Image:
+    """Build a tray icon image (slow — disk I/O + resize)."""
     try:
         with Image.open(TRAY_ICON_FILE) as src:
             icon = src.convert("RGBA")
@@ -125,6 +138,14 @@ def _load_tray_icon_image(armed: bool) -> Image.Image:
         return icon
     except Exception:
         return _make_icon_image(armed)
+
+
+def _load_tray_icon_image(armed: bool) -> Image.Image:
+    """Return the cached tray icon for the given state."""
+    cached = _tray_icon_cache.get(armed)
+    if cached is not None:
+        return cached
+    return _build_tray_icon_image(armed)
 
 
 # ---------------------------------------------------------------------------
@@ -243,91 +264,116 @@ _MB_ICONINFORMATION = 0x40
 _MB_SETFOREGROUND = 0x1000
 
 
-def display_message(text: str) -> None:
-    """Display a notification message to the user (non-blocking)."""
+# Serialized message popup queue — ensures only one tkinter instance at a time.
+_message_queue: queue.Queue[str] = queue.Queue()
+_message_worker_started = False
+_message_worker_lock = threading.Lock()
+
+
+def _message_worker() -> None:
+    """Drain _message_queue sequentially so only one popup is open at a time."""
+    while True:
+        text = _message_queue.get()
+        try:
+            _show_message_sync(text)
+        except Exception:
+            pass
+
+
+def _ensure_message_worker() -> None:
+    """Start the message worker thread on first use."""
+    global _message_worker_started
+    with _message_worker_lock:
+        if _message_worker_started:
+            return
+        _message_worker_started = True
+        threading.Thread(target=_message_worker, daemon=True, name="lzrd-msgbox").start()
+
+
+def _show_message_sync(text: str) -> None:
+    """Show a message popup synchronously (called from the message worker thread)."""
     if PLATFORM == "Windows":
-        def _show() -> None:
+        try:
+            import tkinter as tk
+
+            root = tk.Tk()
+            root.withdraw()
+
+            dialog = tk.Toplevel(root)
+            dialog.title("LZRD Message")
+            dialog.resizable(False, False)
+            dialog.attributes("-topmost", True)
+
             try:
-                import tkinter as tk
-
-                root = tk.Tk()
-                root.withdraw()
-
-                dialog = tk.Toplevel(root)
-                dialog.title("LZRD Message")
-                dialog.resizable(False, False)
-                dialog.attributes("-topmost", True)
-
-                try:
-                    icon_image = tk.PhotoImage(file=str(TRAY_ICON_FILE))
-                    root.iconphoto(True, icon_image)
-                    dialog.iconphoto(True, icon_image)
-                    # Keep a reference so tkinter does not garbage-collect the image.
-                    dialog._lzrd_icon_image = icon_image  # type: ignore[attr-defined]
-                except Exception:
-                    pass
-
-                container = tk.Frame(dialog, padx=14, pady=12)
-                container.pack(fill="both", expand=True)
-
-                label = tk.Label(
-                    container,
-                    text=text,
-                    justify="left",
-                    anchor="w",
-                    wraplength=420,
-                )
-                label.pack(fill="x", expand=True)
-
-                def _close_dialog() -> None:
-                    try:
-                        dialog.destroy()
-                    finally:
-                        root.quit()
-
-                btn = tk.Button(container, text="OK", width=10, command=_close_dialog)
-                btn.pack(pady=(12, 0))
-                dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
-
-                dialog.update_idletasks()
-                width = dialog.winfo_width()
-                height = dialog.winfo_height()
-                x = max((dialog.winfo_screenwidth() - width) // 2, 0)
-                y = max((dialog.winfo_screenheight() - height) // 2, 0)
-                dialog.geometry(f"{width}x{height}+{x}+{y}")
-
-                dialog.deiconify()
-                dialog.lift()
-                dialog.focus_force()
-                btn.focus_set()
-
-                root.mainloop()
-                root.destroy()
+                icon_image = tk.PhotoImage(file=str(TRAY_ICON_FILE))
+                root.iconphoto(True, icon_image)
+                dialog.iconphoto(True, icon_image)
+                dialog._lzrd_icon_image = icon_image  # type: ignore[attr-defined]
             except Exception:
-                ctypes.windll.user32.MessageBoxW(
-                    None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
-                )
-            finally:
-                # Message dialogs may steal foreground/focus, which can release
-                # ClipCursor. Re-apply confinement when still logically locked.
-                if _lzrd and _lzrd.mouse_locked:
-                    lock_mouse_cursor()
-    else:
-        def _show() -> None:
-            for cmd in [
-                ["zenity", "--info", f"--title=LZRD Message", f"--text={text}", "--no-wrap"],
-                ["kdialog", "--title", "LZRD Message", "--msgbox", text],
-                ["notify-send", "LZRD Message", text],
-                ["xmessage", "-center", text],
-            ]:
-                try:
-                    subprocess.Popen(cmd)
-                    return
-                except FileNotFoundError:
-                    continue
-            print(f"[LZRD] Message: {text}")
+                pass
 
-    threading.Thread(target=_show, daemon=True, name="lzrd-msgbox").start()
+            container = tk.Frame(dialog, padx=14, pady=12)
+            container.pack(fill="both", expand=True)
+
+            label = tk.Label(
+                container,
+                text=text,
+                justify="left",
+                anchor="w",
+                wraplength=420,
+            )
+            label.pack(fill="x", expand=True)
+
+            def _close_dialog() -> None:
+                try:
+                    dialog.destroy()
+                finally:
+                    root.quit()
+
+            btn = tk.Button(container, text="OK", width=10, command=_close_dialog)
+            btn.pack(pady=(12, 0))
+            dialog.protocol("WM_DELETE_WINDOW", _close_dialog)
+
+            dialog.update_idletasks()
+            width = dialog.winfo_width()
+            height = dialog.winfo_height()
+            x = max((dialog.winfo_screenwidth() - width) // 2, 0)
+            y = max((dialog.winfo_screenheight() - height) // 2, 0)
+            dialog.geometry(f"{width}x{height}+{x}+{y}")
+
+            dialog.deiconify()
+            dialog.lift()
+            dialog.focus_force()
+            btn.focus_set()
+
+            root.mainloop()
+            root.destroy()
+        except Exception:
+            ctypes.windll.user32.MessageBoxW(
+                None, text, "LZRD Message", _MB_ICONINFORMATION | _MB_SETFOREGROUND
+            )
+        finally:
+            if _lzrd and _lzrd.mouse_locked:
+                lock_mouse_cursor()
+    else:
+        for cmd in [
+            ["zenity", "--info", f"--title=LZRD Message", f"--text={text}", "--no-wrap"],
+            ["kdialog", "--title", "LZRD Message", "--msgbox", text],
+            ["notify-send", "LZRD Message", text],
+            ["xmessage", "-center", text],
+        ]:
+            try:
+                subprocess.Popen(cmd)
+                return
+            except FileNotFoundError:
+                continue
+        print(f"[LZRD] Message: {text}")
+
+
+def display_message(text: str) -> None:
+    """Display a notification message to the user (non-blocking, serialized)."""
+    _ensure_message_worker()
+    _message_queue.put(text)
 
 
 def launch_app(path: str) -> None:
@@ -469,10 +515,14 @@ def _save_push_subscriptions() -> None:
     """Persist push subscriptions to file."""
     try:
         with _push_subscriptions_lock:
-            with _push_file.open('w') as f:
-                json.dump({'subscriptions': _push_subscriptions}, f)
+            snapshot = dict(_push_subscriptions)
+        with _push_file.open('w') as f:
+            json.dump({'subscriptions': snapshot}, f)
     except Exception as e:
         print(f"[LZRD] Warning: could not save push subscriptions: {e}")
+
+
+_PUSH_TTL_SECONDS = 60 * 60 * 24 * 2  # 48 hours
 
 
 def _send_push_notification(title: str, body: str) -> None:
@@ -500,12 +550,19 @@ def _send_push_notification(title: str, body: str) -> None:
                     "badge": "/badge-icon.png"
                 }),
                 vapid_private_key=_vapid_private_key,
-                vapid_claims={"sub": f"mailto:{_vapid_claim_email}"}
+                vapid_claims={"sub": f"mailto:{_vapid_claim_email}"},
+                ttl=_PUSH_TTL_SECONDS,
             )
         except WebPushException as e:
             status_code = e.response.status_code if e.response else None
-            if status_code == 410:
+            if status_code in (404, 410):
                 invalid_subs.add(sub_id)
+            elif status_code == 403:
+                resp_text = str(e.response.text) if e.response else ""
+                if "vapid" in resp_text.lower() or "do not correspond" in resp_text.lower():
+                    invalid_subs.add(sub_id)
+                else:
+                    print(f"[LZRD] Push notification failed for {sub_id}: {e}")
             else:
                 print(f"[LZRD] Push notification failed for {sub_id}: {e}")
         except Exception as e:
@@ -518,6 +575,16 @@ def _send_push_notification(title: str, body: str) -> None:
                 _push_subscriptions.pop(sub_id, None)
         _save_push_subscriptions()
         print(f"[LZRD] Removed {len(invalid_subs)} expired push subscription(s).")
+
+
+# Cached badge PNG bytes — built once at startup by _cache_badge_png().
+_cached_badge_png: bytes = b""
+
+
+def _cache_badge_png() -> None:
+    """Pre-build the notification badge PNG so /badge-icon.png is instant."""
+    global _cached_badge_png
+    _cached_badge_png = _build_notification_badge_png()
 
 
 def _build_notification_badge_png() -> bytes:
@@ -944,7 +1011,8 @@ def manifest_file():
 
 @_flask_app.route("/badge-icon.png")
 def badge_icon_file():
-    return Response(_build_notification_badge_png(), mimetype="image/png")
+    data = _cached_badge_png or _build_notification_badge_png()
+    return Response(data, mimetype="image/png")
 
 
 @_flask_app.route("/<path:filename>")
@@ -1336,16 +1404,25 @@ class LZRD:
         ix, iy = self._initial_pos
         if abs(x - ix) > self.movement_threshold or abs(y - iy) > self.movement_threshold:
             self.alert_triggered = True
-            self.on_state_change()
-            _broadcast(
-                {
-                    "type": "alert",
-                    "armed": True,
-                    "alert": True,
-                    "mouse_locked": self.mouse_locked,
-                }
-            )
-            _send_push_notification("LZRD Alert", "Movement detected!")
+            # Dispatch all heavy work (tray refresh, SSE broadcast, push HTTP)
+            # off the low-level mouse hook callback to avoid Windows killing
+            # the WH_MOUSE_LL hook due to timeout.
+            threading.Thread(
+                target=self._fire_alert, daemon=True, name="lzrd-alert"
+            ).start()
+
+    def _fire_alert(self) -> None:
+        """Handle alert side-effects off the mouse-hook thread."""
+        self.on_state_change()
+        _broadcast(
+            {
+                "type": "alert",
+                "armed": True,
+                "alert": True,
+                "mouse_locked": self.mouse_locked,
+            }
+        )
+        _send_push_notification("LZRD Alert", "Movement detected!")
 
 
 # ---------------------------------------------------------------------------
@@ -1354,7 +1431,12 @@ class LZRD:
 
 
 def _run_flask(port: int) -> None:
-    logging.getLogger("werkzeug").setLevel(logging.ERROR)
+    # Suppress all Werkzeug/Flask access and info logs.
+    for name in ("werkzeug", "flask.app", _flask_app.name):
+        logger = logging.getLogger(name)
+        logger.setLevel(logging.ERROR)
+        logger.addHandler(logging.NullHandler())
+        logger.propagate = False
     _flask_app.run(host="0.0.0.0", port=port, threaded=True, use_reloader=False, debug=False)
 
 
@@ -1363,9 +1445,64 @@ def _run_flask(port: int) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _detach_process() -> None:
+    """Re-launch this script as a detached background process and exit.
+
+    On Windows, uses pythonw.exe (windowless interpreter) with
+    DETACHED_PROCESS so closing the original CMD has no effect.
+    On Linux/macOS, forks and creates a new session.
+    """
+    if PLATFORM == "Windows":
+        python = sys.executable
+        # Prefer pythonw.exe for a windowless process.
+        pythonw = Path(python).with_name("pythonw.exe")
+        if pythonw.exists():
+            python = str(pythonw)
+
+        # Build command: same script, same args, minus --detach.
+        args = [python] + [a for a in sys.argv if a != "--detach"]
+
+        DETACHED_PROCESS = 0x00000008
+        CREATE_NO_WINDOW = 0x08000000
+        subprocess.Popen(
+            args,
+            creationflags=DETACHED_PROCESS | CREATE_NO_WINDOW,
+            close_fds=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        print("[LZRD] Running in the background. Close this window safely.")
+        sys.exit(0)
+    else:
+        # Unix: double-fork daemonization.
+        if os.fork() > 0:
+            sys.exit(0)
+        os.setsid()
+        if os.fork() > 0:
+            sys.exit(0)
+        # Redirect std streams.
+        devnull = os.open(os.devnull, os.O_RDWR)
+        os.dup2(devnull, 0)
+        os.dup2(devnull, 1)
+        os.dup2(devnull, 2)
+        os.close(devnull)
+
+
 def main() -> None:
     global _config, _lzrd, _token, _token_bytes, _owner_username, _owner_password_hash
     global _vapid_public_key, _vapid_private_key, _vapid_claim_email
+
+    parser = argparse.ArgumentParser(description="LZRD — Mouse-movement tripwire")
+    parser.add_argument(
+        "--detach",
+        action="store_true",
+        help="Re-launch as a background process and exit (CMD can be closed).",
+    )
+    cli_args = parser.parse_args()
+
+    if cli_args.detach:
+        _detach_process()
 
     config = load_config()
     _config = config
@@ -1396,6 +1533,10 @@ def main() -> None:
     server_url = public_url if public_url else f"http://{local_ip}:{port}"
 
     _lzrd = LZRD(config)
+
+    # Pre-cache icon images and badge PNG so they are ready instantly.
+    _cache_tray_icons()
+    _cache_badge_png()
 
     # Generate the initial setup keyword and start the rolling timer.
     _roll_setup_keyword()
