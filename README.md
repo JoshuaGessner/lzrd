@@ -19,6 +19,7 @@ Local owner login. No cloud services. No internet required.
 | 🔄 **Restart** | Remotely restart your PC |
 | 💬 **Message** | Pop up a message box on your PC screen |
 | 🚀 **Launch App** | Open any application or run any command on your PC |
+| 📸 **Screenshot** | Capture your PC screen and download the image to your phone |
 
 Movement alerts appear instantly with a flashing red banner and vibrate your phone.
 
@@ -106,6 +107,24 @@ sudo apt install gir1.2-appindicator3-0.1
 ```
 
 On KDE, XFCE, Cinnamon, and most other desktops this step is not needed.
+
+**Step 2b — Install screenshot support (recommended)**
+
+The **Screenshot** feature uses Pillow's screen-capture backend, which needs one of these tools:
+
+```bash
+# X11 desktops (most common)
+sudo apt install scrot          # Ubuntu / Debian
+sudo dnf install scrot          # Fedora
+sudo pacman -S scrot            # Arch
+
+# Wayland desktops (GNOME 41+, Sway, etc.)
+sudo apt install grim           # Ubuntu / Debian
+sudo dnf install grim           # Fedora
+sudo pacman -S grim             # Arch
+```
+
+If neither tool is installed, all other LZRD features still work — only the Screenshot button will show an error.
 
 **Step 3 — Get LZRD**
 
@@ -204,6 +223,7 @@ Installing LZRD as a Progressive Web App (PWA) makes it open like a real app wit
 | **Restart** | Shows a confirmation, then restarts your PC |
 | **Message** | Type a message and it appears as a pop-up on your PC screen |
 | **Launch App** | Enter a program name or full path and it opens on your PC |
+| **Screenshot** | Grabs your PC screen and downloads the PNG to your phone |
 
 ---
 

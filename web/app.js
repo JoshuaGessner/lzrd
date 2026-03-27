@@ -32,6 +32,7 @@ const btnShutdown   = document.getElementById('btn-shutdown');
 const btnRestart    = document.getElementById('btn-restart');
 const btnMessage    = document.getElementById('btn-message');
 const btnLaunch     = document.getElementById('btn-launch');
+const btnScreenshot = document.getElementById('btn-screenshot');
 const btnInstall    = document.getElementById('btn-install');
 const msgModal      = document.getElementById('msg-modal');
 const msgInput      = document.getElementById('msg-input');
@@ -538,6 +539,26 @@ document.getElementById('btn-msg-send').addEventListener('click', async () => {
   msgInput.value = '';
   const r = await api('/api/message', { text });
   if (r?.ok) showToast('Message sent', 'success');
+});
+
+/* ── Screenshot ────────────────────────────────────────────────────────── */
+btnScreenshot.addEventListener('click', async () => {
+  flashBtn(btnScreenshot);
+  try {
+    const res = await fetch('/api/screenshot', { method: 'POST', credentials: 'same-origin' });
+    if (res.status === 401) { initAuthFlow(); return; }
+    if (!res.ok) { showToast('Screenshot failed', 'error'); return; }
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = res.headers.get('Content-Disposition')?.match(/filename="(.+)"/)?.[1] || 'lzrd-screenshot.png';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    showToast('Screenshot saved', 'success');
+  } catch { showToast('Network error', 'error'); }
 });
 
 /* ── Launch app dialog ─────────────────────────────────────────────────── */

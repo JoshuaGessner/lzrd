@@ -49,7 +49,7 @@ from urllib.parse import urlparse
 
 import pystray
 from flask import Flask, Response, jsonify, request, send_from_directory
-from PIL import Image, ImageDraw
+from PIL import Image, ImageDraw, ImageGrab
 from pynput import mouse as pynput_mouse
 from werkzeug.middleware.proxy_fix import ProxyFix
 from pywebpush import webpush, WebPushException
@@ -393,6 +393,22 @@ def display_message(text: str) -> None:
     """Display a notification message to the user (non-blocking, serialized)."""
     _ensure_message_worker()
     _message_queue.put(text)
+
+
+def capture_screenshot() -> bytes | None:
+    """Capture the primary screen and return PNG bytes, or *None* on failure.
+
+    Uses Pillow's :func:`ImageGrab.grab`.  On Linux this requires an external
+    tool such as ``scrot``, ``gnome-screenshot``, or ``grim`` (Wayland).
+    """
+    try:
+        img = ImageGrab.grab()
+        buf = io.BytesIO()
+        img.save(buf, format="PNG")
+        return buf.getvalue()
+    except Exception as exc:
+        print(f"[LZRD] Screenshot failed: {exc}")
+        return None
 
 
 def launch_app(path: str) -> None:
@@ -1206,6 +1222,21 @@ def api_launch():
     except Exception:
         return jsonify({"error": "could not launch application"}), 400
     return jsonify({"ok": True})
+
+
+@_flask_app.route("/api/screenshot", methods=["POST"])
+def api_screenshot():
+    if not _check_token(request):
+        return _unauthorized()
+    data = capture_screenshot()
+    if data is None:
+        return jsonify({"error": "screenshot capture failed"}), 500
+    ts = time.strftime("%Y%m%d-%H%M%S")
+    return Response(
+        data,
+        mimetype="image/png",
+        headers={"Content-Disposition": f'attachment; filename="lzrd-screenshot-{ts}.png"'},
+    )
 
 
 @_flask_app.route("/api/events")
